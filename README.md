@@ -52,7 +52,7 @@ midas-bot/
   "GMT": "0"
 }
 
-✅ Respuesta esperada
+✅ Respuesta esperada:
 
 {
   "success": true,
@@ -72,7 +72,7 @@ midas-bot/
 
     Si no hay link_slug, se genera una URL aleatoria: https://kuruk.in/r8g
 
-    El valor reemplazado se usa automáticamente en el texto_html
+    El valor acortado reemplaza automáticamente al original en texto_html.
 
 ⚙️ Dependencias principales
 
@@ -91,16 +91,15 @@ midas-bot/
     YOURLS API (para acortar URLs)
 
 🐳 Despliegue (Docker)
-
-    Build local:
+1. Build local:
 
 docker build -t midas-bot:latest .
 
-    Docker Compose:
+2. Docker Compose:
 
 docker-compose up -d
 
-    Portainer:
+3. Portainer:
 
 Puedes cargar docker-compose.yml desde Portainer para autodespliegue.
 🔐 Variables de entorno esperadas
@@ -121,13 +120,15 @@ DB_NAME=
 YOURLS_API=https://kuruk.in/yourls-api.php
 YOURLS_SIGNATURE=0eb5a147eb
 
-📌 Notas
+📝 Notas
 
     Usa wa_bot_config de WordPress para la configuración de TTS.
 
     Audios fusionados dinámicamente con FFmpeg.
 
     Variables como {nombre}, {fecha}, {zoom}, {dia_legible} se reemplazan en tiempo real.
+
+    Si el payload contiene mensaje, se usa como HTML final sin buscar etapa.
 
 🔁 Ejemplos (cURL)
 
@@ -154,4 +155,3 @@ curl -X POST https://midas.kurukin.com/bot/etapa --insecure \
 
 Proyecto desarrollado por Kurukin
 Soporte técnico: Javier Quiroz
-

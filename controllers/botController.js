@@ -31,18 +31,36 @@ exports.procesarEtapa = async (req, res) => {
     const payload = { ...req.body };
     console.log('📥 Payload recibido:', payload);
 
+    // Si viene mensaje directo, lo procesamos sin lógica de etapa
+    if (payload.mensaje) {
+      if (payload.fecha && payload.zona_horaria) {
+        const enriquecido = generarVariablesFecha(payload);
+        Object.assign(payload, enriquecido);
+        console.log('🕒 Variables enriquecidas:', enriquecido);
+      }
+
+      await acortarLinks(payload);
+      const textoProcesado = reemplazarVariables(payload.mensaje, payload);
+
+      return res.json({
+        success: true,
+        data: {
+          texto_html: textoProcesado,
+          payload_original: payload
+        }
+      });
+    }
+
     if (!payload.user_id || !payload.etapa) {
       return res.status(400).json({ success: false, error: 'Faltan campos obligatorios' });
     }
 
-    // Enriquecer fecha legible si aplica
     if (payload.fecha && payload.zona_horaria) {
       const enriquecido = generarVariablesFecha(payload);
       Object.assign(payload, enriquecido);
       console.log('🕒 Variables enriquecidas:', enriquecido);
     }
 
-    // Acortar links antes del reemplazo de variables
     await acortarLinks(payload);
 
     const etapa = await etapaService.obtenerEtapa(payload.user_id, payload.etapa);
