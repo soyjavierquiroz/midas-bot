@@ -2,15 +2,22 @@ const etapaService = require('../services/etapaService');
 const minioService = require('../services/minioService');
 const ttsService = require('../services/ttsService');
 const fusionService = require('../services/fusionService');
-const { reemplazarVariables } = require('../utils/textUtils');
+const { reemplazarVariables, generarVariablesFecha } = require('../utils/textUtils');
 
 exports.procesarEtapa = async (req, res) => {
   try {
-    const payload = req.body;
+    const payload = { ...req.body };
     console.log('📥 Payload recibido:', payload);
 
     if (!payload.user_id || !payload.etapa) {
       return res.status(400).json({ success: false, error: 'Faltan campos obligatorios' });
+    }
+
+    // ⏰ Enriquecer payload con fecha legible si aplica
+    if (payload.fecha && payload.zona_horaria) {
+      const enriquecido = generarVariablesFecha(payload);
+      Object.assign(payload, enriquecido);
+      console.log('🕒 Variables enriquecidas:', enriquecido);
     }
 
     const etapa = await etapaService.obtenerEtapa(payload.user_id, payload.etapa);
@@ -19,17 +26,23 @@ exports.procesarEtapa = async (req, res) => {
       return res.status(404).json({ success: false, error: 'Etapa no encontrada' });
     }
 
-    const textos = JSON.parse(etapa.textos || '[]');
-    const textosHtml = JSON.parse(etapa.textos_html || '[]');
+    const textos = (JSON.parse(etapa.textos || '[]')).filter(t => t && t.trim());
+    const textoOriginalPlano = textos[Math.floor(Math.random() * textos.length)] || '';
+    console.log('🧾 Texto plano original:', textoOriginalPlano);
 
-    const textoPlano = reemplazarVariables(
-      textos[Math.floor(Math.random() * textos.length)],
-      payload
-    );
-    const textoHtml = reemplazarVariables(
-      textosHtml[Math.floor(Math.random() * textosHtml.length)],
-      payload
-    );
+    const textosHtml = (JSON.parse(etapa.textos_html || '[]')).filter(t => t && t.trim());
+    const textoOriginalHtml = textosHtml[Math.floor(Math.random() * textosHtml.length)] || '';
+    console.log('📚 Etapa.textos_html filtrados:', textosHtml);
+    console.log('📄 Texto HTML original:', textoOriginalHtml);
+
+    const textoPlano = reemplazarVariables(textoOriginalPlano, payload);
+    const textoHtml = reemplazarVariables(textoOriginalHtml, payload);
+    console.log('📝 Texto HTML generado:', textoHtml);
+    console.log('🔤 Texto para TTS:', textoPlano);
+
+    if (!textoPlano.trim()) {
+      return res.status(400).json({ success: false, error: 'No hay texto válido para generar TTS' });
+    }
 
     const configTTS = await etapaService.obtenerConfigTTS(payload.user_id);
     const audioTTS = await ttsService.generarAudioTTS(textoPlano, configTTS);

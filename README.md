@@ -29,7 +29,7 @@ midas-bot/
 
 ## 🚀 Endpoint principal
 
-`POST /bot/etapa`
+### `POST /bot/etapa`
 
 ### 🔸 Payload de entrada (JSON)
 
@@ -43,8 +43,11 @@ midas-bot/
   "ciudad": "Cochabamba",
   "pais": "Bolivia",
   "zona_horaria": "America/La_Paz",
+  "fecha": "2025-06-20 15:30:00",
+  "zoom": "https://us02web.zoom.us/...",
   "etapa": "dunn",
-  "instancia_evolution_api": "quiroz"
+  "instancia_evolution_api": "quiroz",
+  "GMT": "0"
 }
 
 ✅ Respuesta esperada
@@ -106,14 +109,15 @@ DB_NAME=
 
     Se conecta a la tabla wa_bot_config de WordPress para obtener la config TTS.
 
-    Los audios se fusionan dinámicamente usando ffmpeg (incluido en contenedor).
+    Los audios se fusionan dinámicamente usando ffmpeg (incluido en el contenedor).
 
     Las variables dentro del texto ({nombre}, {ciudad}, etc.) son reemplazadas en tiempo real desde el payload.
 
 📞 Contacto
 
-Proyecto mantenido por Kurukin. Para soporte técnico contactar a Javier Quiroz.
-
+Proyecto mantenido por Kurukin.
+Para soporte técnico contactar a Javier Quiroz.
+🔁 Ejemplos de uso (cURL)
 
 curl -X POST http://104.236.36.75:3000/bot/etapa \
 -H "Content-Type: application/json" \
@@ -130,7 +134,12 @@ curl -X POST http://104.236.36.75:3000/bot/etapa \
   "instancia_evolution_api": "quiroz"
 }'
 
+curl -X POST https://midas.kurukin.com/bot/etapa --insecure \
+-H "Content-Type: application/json" \
+-d '{"user_id": "2", "nombre": "Sasha", "etapa": "dunn"}'
+
 
 curl -X POST https://midas.kurukin.com/bot/etapa --insecure \
-  -H "Content-Type: application/json" \
-  -d '{"user_id": "2", "nombre": "Sasha", "etapa": "dunn"}'
+-H "Content-Type: application/json" \
+-d {"user_id": "4","nombre": "Javier","apellido": "Quiroz","email": "javierquiroztv@gmail.com","telefono": "+59179790873",
+"fecha": "2025-06-20 15:30:00","zona_horaria": "America/La_Paz","zoom": "https://us02web.zoom.us/j/88352000124?pwd=8LI6eki6D90rjVaDWRSiJX5Key05Z0.1","etapa": "agenda_indagacion","instancia_evolution_api": "grandiosa","GMT": "0"}'
