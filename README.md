@@ -1,6 +1,6 @@
-# 🤖 Midas Bot (v1.0)
+# 🤖 Midas Bot (v1.1)
 
-Microservicio modular en Node.js + Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Conexión a MinIO y MySQL (WordPress).
+Microservicio modular en Node.js + Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Soporta reemplazo dinámico de variables, conversión de fechas por zona horaria, y acortamiento automático de enlaces (Zoom, Meet, etc) vía YOURLS.
 
 ---
 
@@ -18,7 +18,8 @@ midas-bot/
 │ ├── minioService.js
 │ └── ttsService.js
 ├── utils/
-│ └── textUtils.js
+│ ├── textUtils.js
+│ └── urlShortener.js
 ├── server.js
 ├── package.json
 ├── Dockerfile
@@ -45,6 +46,7 @@ midas-bot/
   "zona_horaria": "America/La_Paz",
   "fecha": "2025-06-20 15:30:00",
   "zoom": "https://us02web.zoom.us/...",
+  "link_slug": "zoom",
   "etapa": "dunn",
   "instancia_evolution_api": "quiroz",
   "GMT": "0"
@@ -56,11 +58,21 @@ midas-bot/
   "success": true,
   "data": {
     "imagen_base64_puro": "...",
-    "texto_html": "✨ Hola Sasha! Bienvenida a la revolución de las ideas...",
+    "texto_html": "🌸 Hola Sasha, tu sesión está confirmada...",
     "audio_base64_puro": "...",
     "payload_original": { ... }
   }
 }
+
+✂️ Enlaces acortados con YOURLS
+
+    Las variables zoom, meet y link se detectan automáticamente.
+
+    Si existe link_slug, se genera una URL como: https://kuruk.in/zoom-8ks
+
+    Si no hay link_slug, se genera una URL aleatoria: https://kuruk.in/r8g
+
+    El valor reemplazado se usa automáticamente en el texto_html
 
 ⚙️ Dependencias principales
 
@@ -74,22 +86,23 @@ midas-bot/
 
     ElevenLabs TTS API
 
-    FFmpeg (para fusión de audio vía fluent-ffmpeg)
+    FFmpeg (vía fluent-ffmpeg)
 
-    Docker + Portainer (entorno de despliegue)
+    YOURLS API (para acortar URLs)
 
 🐳 Despliegue (Docker)
-1. Build local
+
+    Build local:
 
 docker build -t midas-bot:latest .
 
-2. Docker Compose
+    Docker Compose:
 
 docker-compose up -d
 
-3. Portainer
+    Portainer:
 
-Puedes cargar el docker-compose.yml dentro de Portainer para stack automático.
+Puedes cargar docker-compose.yml desde Portainer para autodespliegue.
 🔐 Variables de entorno esperadas
 
 Definidas en docker-compose.yml:
@@ -105,41 +118,40 @@ DB_USER=
 DB_PASSWORD=
 DB_NAME=
 
+YOURLS_API=https://kuruk.in/yourls-api.php
+YOURLS_SIGNATURE=0eb5a147eb
+
 📌 Notas
 
-    Se conecta a la tabla wa_bot_config de WordPress para obtener la config TTS.
+    Usa wa_bot_config de WordPress para la configuración de TTS.
 
-    Los audios se fusionan dinámicamente usando ffmpeg (incluido en el contenedor).
+    Audios fusionados dinámicamente con FFmpeg.
 
-    Las variables dentro del texto ({nombre}, {ciudad}, etc.) son reemplazadas en tiempo real desde el payload.
+    Variables como {nombre}, {fecha}, {zoom}, {dia_legible} se reemplazan en tiempo real.
+
+🔁 Ejemplos (cURL)
+
+curl -X POST http://104.236.36.75:3000/bot/etapa \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "2",
+    "nombre": "Sasha",
+    "apellido": "Quiroz",
+    "telefono": "+59179790873",
+    "email": "javierquiroztv@gmail.com",
+    "ciudad": "Cochabamba",
+    "pais": "Bolivia",
+    "zona_horaria": "America/La_Paz",
+    "etapa": "dunn",
+    "instancia_evolution_api": "quiroz"
+  }'
+
+curl -X POST https://midas.kurukin.com/bot/etapa --insecure \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "2", "nombre": "Sasha", "etapa": "dunn"}'
 
 📞 Contacto
 
-Proyecto mantenido por Kurukin.
-Para soporte técnico contactar a Javier Quiroz.
-🔁 Ejemplos de uso (cURL)
+Proyecto desarrollado por Kurukin
+Soporte técnico: Javier Quiroz
 
-curl -X POST http://104.236.36.75:3000/bot/etapa \
--H "Content-Type: application/json" \
--d '{
-  "user_id": "2",
-  "nombre": "Sasha",
-  "apellido": "Quiroz",
-  "telefono": "+59179790873",
-  "email": "javierquiroztv@gmail.com",
-  "ciudad": "Cochabamba",
-  "pais": "Bolivia",
-  "zona_horaria": "America/La_Paz",
-  "etapa": "dunn",
-  "instancia_evolution_api": "quiroz"
-}'
-
-curl -X POST https://midas.kurukin.com/bot/etapa --insecure \
--H "Content-Type: application/json" \
--d '{"user_id": "2", "nombre": "Sasha", "etapa": "dunn"}'
-
-
-curl -X POST https://midas.kurukin.com/bot/etapa --insecure \
--H "Content-Type: application/json" \
--d {"user_id": "4","nombre": "Javier","apellido": "Quiroz","email": "javierquiroztv@gmail.com","telefono": "+59179790873",
-"fecha": "2025-06-20 15:30:00","zona_horaria": "America/La_Paz","zoom": "https://us02web.zoom.us/j/88352000124?pwd=8LI6eki6D90rjVaDWRSiJX5Key05Z0.1","etapa": "agenda_indagacion","instancia_evolution_api": "grandiosa","GMT": "0"}'
