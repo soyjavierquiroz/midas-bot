@@ -44,7 +44,7 @@ midas-bot/
 Comprueba que el servicio está arriba y funcionando:
 
 ```bash
-curl http://<HOST>:3000/health
+curl http://<HOST>:4000/health
 # → { "status": "ok" }
 
 POST /bot/etapa
@@ -115,7 +115,7 @@ POST /bot/etapa con mensaje directo
 
 Si envías mensaje en lugar de etapa, Midas devuelve ese HTML directamente (tras interpolar y acortar enlaces):
 
-curl -X POST http://<HOST>:3000/bot/etapa \
+curl -X POST http://<HOST>:4000/bot/etapa \
   -H "Content-Type: application/json" \
   -d '{
     "mensaje": "Hola {nombre}, tu cita es el {dia_legible}",
@@ -167,7 +167,7 @@ services:
   midas-bot:
     image: midas-bot:latest
     ports:
-      - "3000:3000"
+      - "4000:4000"
     environment:
       MINIO_ENDPOINT:           https://kminioback.kurukin.com
       MINIO_ACCESS_KEY:         ...
@@ -184,7 +184,7 @@ services:
       - traefik.enable=true
       - traefik.http.routers.kurukinmidas.rule=Host(`midas.kurukin.com`)
       - traefik.http.routers.kurukinmidas.tls=true
-      - traefik.http.services.kurukinmidas.loadbalancer.server.port=3000
+      - traefik.http.services.kurukinmidas.loadbalancer.server.port=4000
 
 Levantar
 

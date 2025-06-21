@@ -28,7 +28,7 @@ app.use('/test', testRoutes); // opcional
 app.use(errorHandler);
 
 // ————— 6) Levantar servidor —————
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`🟢 Midas Bot API corriendo en puerto ${PORT}`);
 });
