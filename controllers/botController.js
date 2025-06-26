@@ -1,29 +1,24 @@
 // controllers/botController.js
 
-const { URL }               = require('url');
-// Ahora extraemos las funciones directamente de cada módulo:
-const { preprocessPayload } = require('./handlers/preprocessPayload');
-const { acortarLinks }      = require('./handlers/acortarLinks');
-const { handleMensaje }     = require('./handlers/handleMensaje');
-const { handleEtapa }       = require('./handlers/handleEtapa');
-const { sendResponse }      = require('./handlers/sendResponse');
+const preprocessPayload = require('./handlers/preprocessPayload');
+const acortarLinks      = require('./handlers/acortarLinks');
+const handleMensaje     = require('./handlers/handleMensaje');
+const handleEtapa       = require('./handlers/handleEtapa');
+const sendResponse      = require('./handlers/sendResponse');
 
-// Servicio de leads
-const { upsertLead }        = require('../services/leadService');
+const {
+  upsertLead,
+  findLeadByPhoneAndInstance
+} = require('../services/leadService');
 
 /**
  * POST /bot/etapa
- * Flujo actual de procesar etapa o mensaje directo.
  */
 exports.procesarEtapa = async (req, res) => {
   try {
-    // 1) Enriquecer payload
     const payload = preprocessPayload(req.body);
-
-    // 2) Acortar URLs si hay placeholders
     await acortarLinks(payload);
 
-    // 3) Si es mensaje directo, solo interpolar y devolver HTML
     if (payload.mensaje) {
       const html = handleMensaje(payload);
       return res.json({
@@ -32,7 +27,6 @@ exports.procesarEtapa = async (req, res) => {
       });
     }
 
-    // 4) Procesar etapa completa (texto, audio, imagen)
     const result = await handleEtapa(payload);
     return sendResponse(res, result, payload);
 
@@ -46,63 +40,55 @@ exports.procesarEtapa = async (req, res) => {
 
 /**
  * POST /bot/lead
- * Upsert de lead según (telefono, dominio).
  */
 exports.crearLead = async (req, res) => {
   try {
-    // 1) Extraer payload real (soporte n8n u otros que aniden bajo `body`)
+    // Soporte para payload anidado (n8n)
     let incoming = req.body;
-    if (incoming && incoming.body) {
-      if (typeof incoming.body === 'string' && incoming.body.trim().startsWith('{')) {
-        try {
-          incoming = JSON.parse(incoming.body);
-        } catch (e) {
-          console.warn('⚠️ crearLead: no pude parsear incoming.body como JSON', e);
-        }
-      } else if (typeof incoming.body === 'object' && Object.keys(incoming.body).length) {
-        incoming = incoming.body;
-      }
+    if (incoming.body && typeof incoming.body === 'object' && Object.keys(incoming.body).length) {
+      incoming = incoming.body;
+    } else if (typeof incoming.body === 'string') {
+      try { incoming = JSON.parse(incoming.body); } catch {}
     }
 
-    // 2) Validar campos mínimos
-    const { user_id, telefono } = incoming;
-    if (!user_id || !telefono) {
+    const { user_id, telefono, dominio, instancia_evolution_api } = incoming;
+    if (!user_id || !telefono || !instancia_evolution_api) {
       return res.status(400).json({
         success: false,
-        error: 'Campos obligatorios: user_id y telefono'
+        error: 'Campos obligatorios: user_id, telefono e instancia_evolution_api'
       });
     }
 
-    // 3) Inferir dominio si no se envió
-    let { dominio } = incoming;
-    if (!dominio) {
-      if (incoming.fuente) {
-        try { dominio = new URL(incoming.fuente).hostname; } catch {}
-      }
-      if (!dominio && incoming.link) {
-        try { dominio = new URL(incoming.link).hostname; } catch {}
-      }
-      if (!dominio && req.headers.host) {
-        dominio = req.headers.host;
-      }
-    }
-    incoming.dominio = dominio;
-
-    // 4) Upsert en la tabla wa_bot_leads
     const { leadId, userId, isNew } = await upsertLead(incoming);
-
-    // 5) Responder
-    return res.json({
-      success: true,
-      lead_id: leadId,
-      user_id: userId,
-      isNew
-    });
+    return res.json({ success: true, lead_id: leadId, user_id: userId, isNew });
 
   } catch (err) {
     console.error('❌ Error en crearLead:', err);
-    const status  = err.status  || 500;
-    const message = err.message || 'Error interno del servidor';
-    return res.status(status).json({ success: false, error: message });
+    return res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+};
+
+/**
+ * GET /bot/lead
+ */
+exports.buscarLeadByPhoneInstance = async (req, res) => {
+  try {
+    const { telefono, instancia_evolution_api } = req.query;
+    if (!telefono || !instancia_evolution_api) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query params obligatorios: telefono e instancia_evolution_api'
+      });
+    }
+
+    const lead = await findLeadByPhoneAndInstance(telefono, instancia_evolution_api);
+    if (!lead) {
+      return res.status(404).json({ success: false, error: 'Lead no encontrado' });
+    }
+    return res.json({ success: true, data: lead });
+
+  } catch (err) {
+    console.error('❌ Error en buscarLeadByPhoneInstance:', err);
+    return res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 };
