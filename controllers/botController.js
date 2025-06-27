@@ -1,10 +1,10 @@
 // controllers/botController.js
 
-const preprocessPayload = require('./handlers/preprocessPayload');
-const acortarLinks      = require('./handlers/acortarLinks');
-const handleMensaje     = require('./handlers/handleMensaje');
-const handleEtapa       = require('./handlers/handleEtapa');
-const sendResponse      = require('./handlers/sendResponse');
+const { preprocessPayload } = require('./handlers/preprocessPayload');
+const { acortarLinks      } = require('./handlers/acortarLinks');
+const { handleMensaje     } = require('./handlers/handleMensaje');
+const { handleEtapa       } = require('./handlers/handleEtapa');
+const { sendResponse      } = require('./handlers/sendResponse');
 
 const {
   upsertLead,
@@ -16,9 +16,13 @@ const {
  */
 exports.procesarEtapa = async (req, res) => {
   try {
+    // 1) Enriquecer payload
     const payload = preprocessPayload(req.body);
+
+    // 2) Acortar URLs si hay placeholders
     await acortarLinks(payload);
 
+    // 3) Mensaje directo?
     if (payload.mensaje) {
       const html = handleMensaje(payload);
       return res.json({
@@ -27,6 +31,7 @@ exports.procesarEtapa = async (req, res) => {
       });
     }
 
+    // 4) Procesar etapa completa
     const result = await handleEtapa(payload);
     return sendResponse(res, result, payload);
 
@@ -43,7 +48,6 @@ exports.procesarEtapa = async (req, res) => {
  */
 exports.crearLead = async (req, res) => {
   try {
-    // Soporte para payload anidado (n8n)
     let incoming = req.body;
     if (incoming.body && typeof incoming.body === 'object' && Object.keys(incoming.body).length) {
       incoming = incoming.body;
