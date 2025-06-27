@@ -5,11 +5,17 @@ const pool = require('./dbService');
  * Inserta o actualiza un lead según (telefono, instancia_evolution_api).
  */
 async function upsertLead(leadData) {
+  // 1) Normalizar teléfono: quitar '+' si existe
+  const telefono = leadData.telefono.startsWith('+')
+    ? leadData.telefono.slice(1)
+    : leadData.telefono;
+  const instancia = leadData.instancia_evolution_api;
+  console.log('[leadService] upsertLead called with:', { telefono, instancia });
+
+  // 2) Separar fields fijos y resto
   const {
     user_id,
-    telefono,
     dominio,
-    instancia_evolution_api,
     nombre,
     apellido,
     email,
@@ -20,25 +26,19 @@ async function upsertLead(leadData) {
     pais,
     ...rest
   } = leadData;
-
-  // 1) Normalizar el teléfono: quitar '+' inicial si existiera
-  const tel = telefono.startsWith('+') ? telefono.slice(1) : telefono;
-
-  // 2) Serializar el resto del payload
   const payloadExtra = Object.keys(rest).length ? JSON.stringify(rest) : null;
 
-  // 3) ¿Existe ya este lead? (buscamos por telefono normalizado + instancia)
+  // 3) Revisar si ya existe
   const [rows] = await pool.query(
     `SELECT lead_id
        FROM wa_bot_leads
-      WHERE telefono = ?
-        AND instancia_evolution_api = ?
+      WHERE telefono = ? AND instancia_evolution_api = ?
       LIMIT 1`,
-    [tel, instancia_evolution_api]
+    [telefono, instancia]
   );
 
   if (rows.length) {
-    // 4a) Si existe, lo actualizamos
+    // 4a) Actualizar
     const leadId = rows[0].lead_id;
     await pool.query(
       `UPDATE wa_bot_leads SET
@@ -56,29 +56,17 @@ async function upsertLead(leadData) {
        WHERE lead_id = ?`,
       [user_id, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payloadExtra, leadId]
     );
+    console.log('[leadService] Updated lead:', leadId);
     return { leadId, userId: user_id, isNew: false };
   } else {
-    // 4b) Si no existe, insertamos uno nuevo usando telefono normalizado
+    // 4b) Insertar nuevo
     const [result] = await pool.query(
       `INSERT INTO wa_bot_leads
          (user_id, telefono, dominio, instancia_evolution_api, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payload)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        user_id,
-        tel,
-        dominio,
-        instancia_evolution_api,
-        nombre,
-        apellido,
-        email,
-        fecha,
-        zona_horaria,
-        fuente,
-        ciudad,
-        pais,
-        payloadExtra
-      ]
+      [user_id, telefono, dominio, instancia, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payloadExtra]
     );
+    console.log('[leadService] Inserted new lead:', result.insertId);
     return { leadId: result.insertId, userId: user_id, isNew: true };
   }
 }
@@ -87,12 +75,12 @@ async function upsertLead(leadData) {
  * Busca un lead por teléfono + instancia_evolution_api.
  */
 async function findLeadByPhoneAndInstance(telefono, instancia) {
-  // 1) Normalizar el teléfono
+  // Normalizar teléfono
   const tel = telefono.startsWith('+') ? telefono.slice(1) : telefono;
+  console.log('[leadService] findLeadByPhoneAndInstance with:', { tel, instancia });
 
-  // 2) Ejecutar la query
   const [rows] = await pool.query(
-    `SELECT 
+    `SELECT
        lead_id,
        user_id,
        nombre,
@@ -105,14 +93,11 @@ async function findLeadByPhoneAndInstance(telefono, instancia) {
        pais,
        payload
      FROM wa_bot_leads
-     WHERE telefono = ?
-       AND instancia_evolution_api = ?
+     WHERE telefono = ? AND instancia_evolution_api = ?
      LIMIT 1`,
     [tel, instancia]
   );
-
   return rows[0] || null;
 }
 
 module.exports = { upsertLead, findLeadByPhoneAndInstance };
-
