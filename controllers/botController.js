@@ -8,30 +8,31 @@ const { sendResponse }      = require('./handlers/sendResponse');
 
 const {
   upsertLead,
+  addLeadStage,
   findLeadByPhoneAndInstance
 } = require('../services/leadService');
 
 /**
  * POST /bot/etapa
- * — Enriquecer payload
- * — Guardar/actualizar lead
- * — Acortar links
- * — Procesar mensaje o etapa
  */
 exports.procesarEtapa = async (req, res) => {
   try {
     // 1) Enriquecer payload
     const payload = preprocessPayload(req.body);
-    console.log('[botController] procesarEtapa payload enriched:', payload);
 
-    // 2) Guardar o actualizar lead en CRM
+    // 2) Crear o actualizar lead
     const { leadId, userId, isNew } = await upsertLead(payload);
-    console.log(`[botController] upsertLead → leadId=${leadId}, userId=${userId}, isNew=${isNew}`);
 
-    // 3) Acortar URLs si toca
+    // 3) Registrar la etapa en el historial
+    await addLeadStage(leadId, payload.etapa, {
+      ...payload,
+      etapaRegistradaEn: new Date().toISOString(),
+    });
+
+    // 4) Acortar enlaces si aplica
     await acortarLinks(payload);
 
-    // 4) Mensaje directo?
+    // 5) Si es mensaje directo, responder
     if (payload.mensaje) {
       const html = handleMensaje(payload);
       return res.json({
@@ -40,7 +41,7 @@ exports.procesarEtapa = async (req, res) => {
       });
     }
 
-    // 5) Procesar etapa completa
+    // 6) Procesar etapa completa
     const result = await handleEtapa(payload);
     return sendResponse(res, result, payload);
 
@@ -54,7 +55,6 @@ exports.procesarEtapa = async (req, res) => {
 
 /**
  * POST /bot/lead
- * Upsert de lead según telefono+instancia
  */
 exports.crearLead = async (req, res) => {
   try {
@@ -65,8 +65,6 @@ exports.crearLead = async (req, res) => {
       try { incoming = JSON.parse(incoming.body); } catch {}
     }
 
-    console.log('[botController] crearLead payload:', incoming);
-
     const { user_id, telefono, dominio, instancia_evolution_api } = incoming;
     if (!user_id || !telefono || !instancia_evolution_api) {
       return res.status(400).json({
@@ -76,7 +74,6 @@ exports.crearLead = async (req, res) => {
     }
 
     const { leadId, userId, isNew } = await upsertLead(incoming);
-    console.log(`[botController] crearLead → leadId=${leadId}, userId=${userId}, isNew=${isNew}`);
     return res.json({ success: true, lead_id: leadId, user_id: userId, isNew });
 
   } catch (err) {
@@ -86,7 +83,7 @@ exports.crearLead = async (req, res) => {
 };
 
 /**
- * GET /bot/lead?telefono=…&instancia_evolution_api=…
+ * GET /bot/lead
  */
 exports.buscarLeadByPhoneInstance = async (req, res) => {
   try {
@@ -98,13 +95,10 @@ exports.buscarLeadByPhoneInstance = async (req, res) => {
       });
     }
 
-    console.log('[botController] buscarLeadByPhoneInstance query:', req.query);
     const lead = await findLeadByPhoneAndInstance(telefono, instancia_evolution_api);
     if (!lead) {
-      console.log('[botController] buscarLeadByPhoneInstance → no encontrado');
       return res.status(404).json({ success: false, error: 'Lead no encontrado' });
     }
-    console.log('[botController] buscarLeadByPhoneInstance → encontrado:', lead);
     return res.json({ success: true, data: lead });
 
   } catch (err) {

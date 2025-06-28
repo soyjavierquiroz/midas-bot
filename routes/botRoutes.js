@@ -1,4 +1,5 @@
 // routes/botRoutes.js
+
 const express = require('express');
 const router  = express.Router();
 
@@ -8,15 +9,16 @@ const {
   buscarLeadByPhoneInstance
 } = require('../controllers/botController');
 
-//!!! NO incluir '/bot' aquí, se monta en server.js con app.use('/bot', botRoutes)
+// Healthcheck básico
+router.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// POST  /bot/etapa
+// Procesar etapa o mensaje
 router.post('/etapa', procesarEtapa);
 
-// POST  /bot/lead
+// Crear o actualizar lead independiente
 router.post('/lead', crearLead);
 
-// GET   /bot/lead?telefono=…&instancia_evolution_api=…
+// Obtener datos de un lead existente
 router.get('/lead', buscarLeadByPhoneInstance);
 
 module.exports = router;
