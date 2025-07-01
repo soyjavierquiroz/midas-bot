@@ -6,3 +6,6 @@ node_modules
 *.jpg
 *.png
 
+# configuración local de Docker / desarrollo
+docker-compose-dev.yml
+Dockerfile

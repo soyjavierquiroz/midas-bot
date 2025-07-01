@@ -21,7 +21,7 @@ exports.procesarEtapa = async (req, res) => {
     const payload = preprocessPayload(req.body);
 
     // 2) Crear o actualizar lead
-    const { leadId, userId, isNew } = await upsertLead(payload);
+    const { leadId } = await upsertLead(payload);
 
     // 3) Registrar la etapa en el historial
     await addLeadStage(leadId, payload.etapa, {
@@ -59,13 +59,16 @@ exports.procesarEtapa = async (req, res) => {
 exports.crearLead = async (req, res) => {
   try {
     let incoming = req.body;
+
     if (incoming.body && typeof incoming.body === 'object' && Object.keys(incoming.body).length) {
       incoming = incoming.body;
     } else if (typeof incoming.body === 'string') {
-      try { incoming = JSON.parse(incoming.body); } catch {}
+      try {
+        incoming = JSON.parse(incoming.body);
+      } catch (_parseErr) { } // eslint-disable-line no-unused-vars,no-empty
     }
 
-    const { user_id, telefono, dominio, instancia_evolution_api } = incoming;
+    const { user_id, telefono, instancia_evolution_api } = incoming;
     if (!user_id || !telefono || !instancia_evolution_api) {
       return res.status(400).json({
         success: false,
@@ -73,8 +76,8 @@ exports.crearLead = async (req, res) => {
       });
     }
 
-    const { leadId, userId, isNew } = await upsertLead(incoming);
-    return res.json({ success: true, lead_id: leadId, user_id: userId, isNew });
+    const { leadId } = await upsertLead(incoming);
+    return res.json({ success: true, lead_id: leadId });
 
   } catch (err) {
     console.error('❌ Error en crearLead:', err);

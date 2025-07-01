@@ -8,6 +8,7 @@ const bodyParser    = require('body-parser');
 const botRoutes     = require('./routes/botRoutes');
 const testRoutes    = require('./routes/testRoutes'); // si lo usas
 const errorHandler  = require('./middlewares/errorHandler');
+const config        = require('./config');            // <–– añadido
 
 const app = express();
 
@@ -28,7 +29,7 @@ app.use('/test', testRoutes); // opcional
 app.use(errorHandler);
 
 // ————— 6) Levantar servidor —————
-const PORT = process.env.PORT || 4000;
+const PORT = config.port;                              // <–– modificado
 app.listen(PORT, () => {
   console.log(`🟢 Midas Bot API corriendo en puerto ${PORT}`);
 });
