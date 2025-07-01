@@ -164,7 +164,7 @@ Desarrollo (Docker Compose)
 
 docker-compose -f docker-compose-dev.yml up -d --build
 
-    Expone el servicio en el puerto 4001.
+    Expone el servicio en el puerto 4000.
 
     Usa tu directorio local como volumen para desarrollo en caliente.
 
@@ -181,7 +181,7 @@ docker-compose up -d --build
 Defínelas en tu .env o en los bloques environment de los Docker Compose:
 
 # Puerto de la API
-PORT=4001
+PORT=4000
 
 # MinIO
 MINIO_ENDPOINT=
