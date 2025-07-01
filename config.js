@@ -2,7 +2,7 @@
 require('dotenv').config();
 
 module.exports = {
-  port: parseInt(process.env.PORT, 10) || 4001,
+  port: parseInt(process.env.PORT, 10) || 4000,
 
   // Configuración de MinIO
   minio: {
