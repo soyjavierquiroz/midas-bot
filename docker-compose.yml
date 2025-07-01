@@ -7,33 +7,29 @@ services:
     volumes:
       - /opt/projects/midas-bot:/opt/projects/midas-bot
     command: npm start
-    ports:
-      - "4000:4000"
     environment:
       # MinIO
-      MINIO_ENDPOINT:           https://kminioback.kurukin.com
-      MINIO_ACCESS_KEY:         kc9A2XrJOBVSK5diJN8X
-      MINIO_SECRET_KEY:         x3mrAdZhvHd4a1nKift1vJdswvGnf8ltHqw3YUy1
-      MINIO_REGION:             us-east-1
-      MINIO_FORCE_PATH_STYLE:   "true"
-
+      MINIO_ENDPOINT: "https://kminioback.kurukin.com"
+      MINIO_ACCESS_KEY: "kc9A2XrJOBVSK5diJN8X"
+      MINIO_SECRET_KEY: "x3mrAdZhvHd4a1nKift1vJdswvGnf8ltHqw3YUy1"
+      MINIO_REGION: "us-east-1"
+      MINIO_FORCE_PATH_STYLE: "true"
       # WordPress MySQL
-      DB_HOST:                  wordpress_db
-      DB_USER:                  bot_kurukin_user
-      DB_PASSWORD:              cdfedf0ae18a2b08cdd180823fad884d
-      DB_NAME:                  bot_kurukin_wp
-
-      # YOURLS (¡añade estas dos!)
-      YOURLS_API:               https://kuruk.in/yourls-api.php
-      YOURLS_SIGNATURE:         0eb5a147eb
-
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.kurukinmidas.rule=Host(`midas.kurukin.com`)
-      - traefik.http.routers.kurukinmidas.entrypoints=websecure
-      - traefik.http.routers.kurukinmidas.tls.certresolver=le
-      - traefik.http.routers.kurukinmidas.tls=true
-      - traefik.http.services.kurukinmidas.loadbalancer.server.port=4000
+      DB_HOST: "wordpress_db"
+      DB_USER: "bot_kurukin_user"
+      DB_PASSWORD: "cdfedf0ae18a2b08cdd180823fad884d"
+      DB_NAME: "bot_kurukin_wp"
+      # YOURLS
+      YOURLS_API: "https://kuruk.in/yourls-api.php"
+      YOURLS_SIGNATURE: "0eb5a147eb"
+    deploy: # Siempre pon las labels de Traefik bajo la sección deploy.labels: en cada servicio.
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.kurukinmidas.rule=Host(`midas.kurukin.com`)"
+        - "traefik.http.routers.kurukinmidas.entrypoints=websecure"
+        - "traefik.http.routers.kurukinmidas.tls.certresolver=le"
+        - "traefik.http.routers.kurukinmidas.tls=true"
+        - "traefik.http.services.kurukinmidas.loadbalancer.server.port=4000"
     networks:
       - general_network
       - traefik_public
