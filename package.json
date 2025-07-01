@@ -4,7 +4,8 @@
   "description": "Microservicio inicial Midas Bot",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "find-orphans": "madge --extensions js --orphans ."
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.570.0",
@@ -18,5 +19,12 @@
     "mysql2": "^3.9.7",
     "stream-to-buffer": "^0.1.0",
     "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "eslint": "^9.30.0",
+    "eslint-plugin-import": "^2.32.0",
+    "globals": "^16.2.0",
+    "madge": "^8.0.0"
   }
 }

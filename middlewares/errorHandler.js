@@ -4,7 +4,7 @@
  * Middleware global para manejar errores no atrapados.
  * Debe ir **al final** de todas las rutas.
  */
-function errorHandler(err, req, res, next) {
+function errorHandler(err, _req, res, _next) {
   console.error('❌ Unhandled error:', err);
 
   // Si el error trae status y message, los usamos; si no, 500 + mensaje por defecto
