@@ -1,35 +1,64 @@
-const axios = require('axios');
+// services/ttsService.js
 
-exports.generarAudioTTS = async (texto, config) => {
+const axios = require('axios');
+const { tts: envTts } = require('../config');
+
+/**
+ * Genera audio TTS usando ElevenLabs.
+ * 
+ * @param {string} texto - Texto a convertir en audio.
+ * @param {Object} [override] - Configuración opcional proveniente de payload/DB.
+ * @returns {Promise<Buffer>} - Buffer con el audio generado.
+ * @throws {Error} - Si la llamada a ElevenLabs falla.
+ */
+async function generarAudioTTS(texto, override = {}) {
+  const {
+    model_id: oModelId,
+    voice_id: oVoiceId,
+    eleven_api_key: oApiKey,
+    stability: oStability,
+    similarity_boost: oSimilarityBoost,
+    style: oStyle,
+    speaker_boost: oSpeakerBoost,
+  } = override;
+
+  // Fallback: si no viene en override, usamos la config de env
+  const apiKey               = oApiKey             || envTts.apiKey;
+  const voiceId              = oVoiceId            || envTts.voiceId;
+  const modelId              = oModelId            || envTts.modelId;
+  const stabilityUsed        = oStability ?? envTts.stability;
+  const similarityBoostUsed  = oSimilarityBoost ?? envTts.similarityBoost;
+  const styleUsed            = oStyle      ?? envTts.style;
+  const speakerBoostUsed     = oSpeakerBoost ?? envTts.speakerBoost;
+
   const payload = {
     text: texto,
-    model_id: config.model_id,
+    model_id: modelId,
     voice_settings: {
-      stability: config.stability,
-      similarity_boost: config.similarity_boost,
-      style: config.style,
-      use_speaker_boost: !!config.speaker_boost
-    }
+      stability: stabilityUsed,
+      similarity_boost: similarityBoostUsed,
+      style: styleUsed,
+      use_speaker_boost: speakerBoostUsed,
+    },
   };
 
-  try {
-    console.log('🔤 Texto para TTS:', texto);
-    console.log('🎛 Modelo:', config.model_id);
-    console.log('🔊 Voz:', config.voice_id);
-    console.log('🧪 Parámetros:', payload.voice_settings);
+  console.log('🔤 Texto para TTS:', texto);
+  console.log('🎛 Modelo:', modelId);
+  console.log('🔊 Voz:', voiceId);
+  console.log('🧪 Parámetros:', payload.voice_settings);
 
+  try {
     const response = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${config.voice_id}/stream`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
       payload,
       {
         headers: {
           'Content-Type': 'application/json',
-          'xi-api-key': config.eleven_api_key
+          'xi-api-key': apiKey,
         },
-        responseType: 'arraybuffer'
+        responseType: 'arraybuffer',
       }
     );
-
     console.log('✅ Audio TTS generado correctamente');
     return Buffer.from(response.data);
   } catch (err) {
@@ -39,4 +68,6 @@ exports.generarAudioTTS = async (texto, config) => {
     console.error('❌ Response data:', rawData);
     throw new Error(`TTS error: ${status}`);
   }
-};
+}
+
+module.exports = { generarAudioTTS };

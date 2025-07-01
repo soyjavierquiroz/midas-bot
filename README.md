@@ -1,6 +1,6 @@
 # 🤖 Midas Bot (v1.2)
 
-Microservicio modular en Node.js + Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Ahora con arquitectura handler-based, healthcheck, middleware de errores y estructura más limpia.
+Microservicio modular en Node.js + Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Ahora con arquitectura handler-based, healthcheck, middleware de errores y configuración centralizada en `config.js`.
 
 ---
 
@@ -22,6 +22,7 @@ midas-bot/
 │ └── testRoutes.js
 ├── services/
 │ ├── dbService.js
+│ ├── leadService.js
 │ ├── etapaService.js
 │ ├── fusionService.js
 │ ├── minioService.js
@@ -29,9 +30,11 @@ midas-bot/
 ├── utils/
 │ ├── textUtils.js
 │ └── urlShortener.js
+├── config.js
 ├── server.js
 ├── package.json
 ├── Dockerfile
+├── docker-compose-dev.yml
 └── docker-compose.yml
 
 
@@ -39,8 +42,7 @@ midas-bot/
 
 ## 🚀 Endpoints
 
-### `GET /health`
-
+### `GET /health`  
 Comprueba que el servicio está arriba y funcionando:
 
 ```bash
@@ -49,90 +51,93 @@ curl http://<HOST>:4000/health
 
 POST /bot/etapa
 
-Flujo principal de procesamiento de “etapa”:
-🔸 Payload de entrada (JSON)
-
-{
-  "user_id": "2",
-  "nombre": "Sasha",
-  "apellido": "Quiroz",
-  "telefono": "+59179790873",
-  "email": "sasha@example.com",
-  "ciudad": "Cochabamba",
-  "pais": "Bolivia",
-  "zona_horaria": "America/La_Paz",
-  "fecha": "2025-06-20 15:30:00",
-  "zoom": "https://us02web.zoom.us/…",
-  "meet": "https://meet.google.com/…",
-  "link": "https://example.com/?code={codigo}",
-  "link_slug": "evento",
-  "etapa": "dunn",
-  "instancia_evolution_api": "quiroz",
-  "GMT": "0"
-}
-
-✅ Comportamiento
-
-    preprocessPayload
-
-        Enriquecer con dia_legible y hora_legible (moment-timezone).
-
-    acortarLinks
-
-        Interpola {zoom}, {meet}, {link} → encodeURI → corta con YOURLS.
-
-        Si la URL ya existía, recupera el alias sin error.
-
-    handleEtapa
-
-        Valida user_id y etapa.
-
-        Recupera textos y audios base desde MySQL/WordPress.
-
-        Reemplaza placeholders en texto plano y HTML.
-
-        Genera TTS (ElevenLabs) y fusiona con audio base (FFmpeg + fluent-ffmpeg).
-
-        Descarga imagen de MinIO en Base64.
-
-    sendResponse
-
-        Devuelve { imagen_base64_puro, texto_html, audio_base64_puro, payload_original }.
-
-🔸 Respuesta esperada
-
-{
-  "success": true,
-  "data": {
-    "imagen_base64_puro": "...",
-    "texto_html": "🌸 Hola Sasha, tu sesión está confirmada...",
-    "audio_base64_puro": "...",
-    "payload_original": { /* mismo JSON de entrada, con campos enriquecidos */ }
-  }
-}
-
-POST /bot/etapa con mensaje directo
-
-Si envías mensaje en lugar de etapa, Midas devuelve ese HTML directamente (tras interpolar y acortar enlaces):
+Flujo principal de procesamiento de etapa o mensaje directo:
 
 curl -X POST http://<HOST>:4000/bot/etapa \
   -H "Content-Type: application/json" \
   -d '{
-    "mensaje": "Hola {nombre}, tu cita es el {dia_legible}",
+    "user_id": "2",
     "nombre": "Sasha",
+    "apellido": "Quiroz",
+    "telefono": "+59179790873",
+    "email": "sasha@example.com",
+    "ciudad": "Cochabamba",
+    "pais": "Bolivia",
     "zona_horaria": "America/La_Paz",
     "fecha": "2025-06-20 15:30:00",
     "zoom": "https://us02web.zoom.us/…",
-    "link_slug": "zoom"
+    "meet": "https://meet.google.com/…",
+    "link": "https://example.com/?code={codigo}",
+    "link_slug": "evento",
+    "etapa": "dunn",
+    "instancia_evolution_api": "quiroz",
+    "GMT": "0"
   }'
 
-Rutas adicionales
+    Si el payload incluye "mensaje": "..."
+    se omite la etapa y se devuelve solo el HTML interpolado.
 
-    GET /health — Healthcheck rápido.
+Respuesta esperada:
 
-    POST /bot/etapa — Flujo de etapa o mensaje.
+{
+  "success": true,
+  "data": {
+    "imagen_base64_puro": "<Base64>",
+    "texto_html": "🌸 Hola Sasha, tu sesión está confirmada...",
+    "audio_base64_puro": "<Base64>",
+    "payload_original": { /* JSON enriquecido con dia_legible, hora_legible, enlaces acortados… */ }
+  }
+}
 
-    /test — Endpoints de prueba (según routes/testRoutes.js).
+POST /bot/lead
+
+Crea o actualiza un lead de forma independiente:
+
+curl -X POST http://<HOST>:4000/bot/lead \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "2",
+    "telefono": "+59179790873",
+    "instancia_evolution_api": "quiroz"
+  }'
+
+Respuesta esperada:
+
+{
+  "success": true,
+  "data": {
+    "lead_id": 123,
+    "user_id": "2",
+    "isNew": true
+  }
+}
+
+GET /bot/lead
+
+Busca un lead existente por teléfono e instancia:
+
+curl -G http://<HOST>:4000/bot/lead \
+  --data-urlencode "telefono=+59179790873" \
+  --data-urlencode "instancia_evolution_api=quiroz"
+
+Respuesta esperada:
+
+{
+  "success": true,
+  "data": {
+    "lead_id": 123,
+    "user_id": "2",
+    "nombre": "Sasha",
+    "apellido": "Quiroz",
+    "email": "sasha@example.com",
+    "fecha": "2025-06-20 15:30:00",
+    "zona_horaria": "America/La_Paz",
+    "fuente": null,
+    "ciudad": "Cochabamba",
+    "pais": "Bolivia",
+    "payload": { /* datos extra */ }
+  }
+}
 
 ⚙️ Dependencias principales
 
@@ -154,69 +159,69 @@ Rutas adicionales
 
     dotenv
 
-🐳 Despliegue (Docker + Traefik)
+🐳 Despliegue
+Desarrollo (Docker Compose)
 
-    Build local
+docker-compose -f docker-compose-dev.yml up -d --build
 
-docker build -t midas-bot:latest .
+    Expone el servicio en el puerto 4001.
 
-Docker Compose
-Asegúrate de tener en docker-compose.yml todas tus variables en el bloque environment:
+    Usa tu directorio local como volumen para desarrollo en caliente.
 
-services:
-  midas-bot:
-    image: midas-bot:latest
-    ports:
-      - "4000:4000"
-    environment:
-      MINIO_ENDPOINT:           https://kminioback.kurukin.com
-      MINIO_ACCESS_KEY:         ...
-      MINIO_SECRET_KEY:         ...
-      MINIO_REGION:             us-east-1
-      MINIO_FORCE_PATH_STYLE:   "true"
-      DB_HOST:                  wordpress_db
-      DB_USER:                  bot_kurukin_user
-      DB_PASSWORD:              ...
-      DB_NAME:                  bot_kurukin_wp
-      YOURLS_API:               https://kuruk.in/yourls-api.php
-      YOURLS_SIGNATURE:         0eb5a147eb
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.kurukinmidas.rule=Host(`midas.kurukin.com`)
-      - traefik.http.routers.kurukinmidas.tls=true
-      - traefik.http.services.kurukinmidas.loadbalancer.server.port=4000
+Producción (Docker Compose/Traefik)
 
-Levantar
+docker-compose up -d --build
 
-    docker-compose up -d --build
+    Expone el servicio en el puerto 4000.
+
+    Definido en docker-compose.yml junto a etiquetas de Traefik.
 
 🔐 Variables de entorno
 
-Definidas en docker-compose.yml:
+Defínelas en tu .env o en los bloques environment de los Docker Compose:
 
+# Puerto de la API
+PORT=4001
+
+# MinIO
 MINIO_ENDPOINT=
 MINIO_ACCESS_KEY=
 MINIO_SECRET_KEY=
 MINIO_REGION=
 MINIO_FORCE_PATH_STYLE=true
 
+# MySQL (WordPress)
 DB_HOST=
 DB_USER=
 DB_PASSWORD=
 DB_NAME=
 
+# YOURLS
 YOURLS_API=
 YOURLS_SIGNATURE=
 
+# ElevenLabs TTS
+ELEVEN_API_KEY=
+ELEVEN_VOICE_ID=
+ELEVEN_MODEL_ID=
+TTS_STABILITY=0.5
+TTS_SIMILARITY_BOOST=0.7
+TTS_STYLE=0.8
+TTS_USE_SPEAKER_BOOST=true
+
 📝 Notas
 
-    Modularización: cada paso (preprocess, shorten, handleMensaje, handleEtapa, sendResponse) vive en su propio handler.
+    Modularización: cada paso (preprocess, acortar, handleMensaje, handleEtapa, sendResponse) vive en su propio handler.
 
-    Middleware global: middlewares/errorHandler.js captura y formatea errores.
+    Configuración centralizada en config.js.
 
-    Healthcheck: GET /health listo para probes.
+    Middleware global (errorHandler.js) captura y formatea errores.
 
-    Futuro: en la próxima versión añadiremos endpoint POST /bot/lead y tests automatizados.
+    Cache de URLs y detección de enlaces ya acortados.
+
+    Logs con contexto para facilitar depuración en producción.
+
+    Futuro: tests automatizados e integración continua.
 
 📞 Contacto
 
