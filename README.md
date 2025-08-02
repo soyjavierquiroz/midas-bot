@@ -1,6 +1,13 @@
-# 🤖 Midas Bot (v1.2)
+# 🤖 Midas Bot (v1.3)
 
-Microservicio modular en Node.js + Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Ahora con arquitectura handler-based, healthcheck, middleware de errores y configuración centralizada en `config.js`.
+Microservicio modular en Node.js y Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Ahora con:
+
+- Arquitectura _handler-based_  
+- Healthcheck  
+- Middleware global de errores  
+- Configuración centralizada en `config.js`  
+- **Normalización de nombres** vía `utils/nameUtils.js` + diccionario (`utils/nameDictionary.js`)  
+- Soporte para plantillas propias de HTML (`payload.texto_html`)  
 
 ---
 
@@ -29,7 +36,9 @@ midas-bot/
 │ └── ttsService.js
 ├── utils/
 │ ├── textUtils.js
-│ └── urlShortener.js
+│ ├── urlShortener.js
+│ ├── nameDictionary.js ← Diccionario de 1000+ nombres latinos
+│ └── nameUtils.js ← Funciones de normalización
 ├── config.js
 ├── server.js
 ├── package.json
@@ -43,7 +52,7 @@ midas-bot/
 ## 🚀 Endpoints
 
 ### `GET /health`  
-Comprueba que el servicio está arriba y funcionando:
+Comprueba el estado del servicio:
 
 ```bash
 curl http://<HOST>:4000/health
@@ -51,31 +60,43 @@ curl http://<HOST>:4000/health
 
 POST /bot/etapa
 
-Flujo principal de procesamiento de etapa o mensaje directo:
+Flujo principal (etapa o mensaje directo). Payload mínimo:
 
-curl -X POST http://<HOST>:4000/bot/etapa \
+curl -X POST "http://<HOST>:<PUERTO>/bot/etapa" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "2",
-    "nombre": "Sasha",
-    "apellido": "Quiroz",
+    "nombre": "juan LUIS",
+    "apellido": "PÉREZ GÓMEZ",
     "telefono": "+59179790873",
-    "email": "sasha@example.com",
-    "ciudad": "Cochabamba",
-    "pais": "Bolivia",
-    "zona_horaria": "America/La_Paz",
-    "fecha": "2025-06-20 15:30:00",
-    "zoom": "https://us02web.zoom.us/…",
-    "meet": "https://meet.google.com/…",
-    "link": "https://example.com/?code={codigo}",
-    "link_slug": "evento",
+    "email": "test2@example.com",
     "etapa": "dunn",
-    "instancia_evolution_api": "quiroz",
-    "GMT": "0"
+    "pais": "Bolivia",
+    "ciudad": "Cochabamba",
+    "zona_horaria": "America/La_Paz",
+    "instancia_evolution_api": "prueba",
+    "dominio": "prueba.com"
   }'
 
-    Si el payload incluye "mensaje": "..."
-    se omite la etapa y se devuelve solo el HTML interpolado.
+    Si incluyes "mensaje": "...", se omite la etapa y solo se devuelve HTML interpolado.
+
+Ejemplo de payload con plantilla propia:
+
+curl -X POST "http://<HOST>:<PUERTO>/bot/etapa" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "3",
+    "nombre": "Ana",
+    "apellido": "Pérez",
+    "telefono": "+59179790873",
+    "email": "test@example.com",
+    "etapa": "dunn",
+    "pais": "Bolivia",
+    "ciudad": "Cochabamba",
+    "zona_horaria": "America/La_Paz",
+    "instancia_evolution_api": "prueba",
+    "texto_html": "¡Hola <b>{nombre}</b>, bienvenido a la etapa de prueba! Visita {link}."
+  }'
 
 Respuesta esperada:
 
@@ -83,61 +104,23 @@ Respuesta esperada:
   "success": true,
   "data": {
     "imagen_base64_puro": "<Base64>",
-    "texto_html": "🌸 Hola Sasha, tu sesión está confirmada...",
+    "texto_html": "¡Hola <b>Ana</b>, bienvenido a la etapa de prueba! Visita https://…",
     "audio_base64_puro": "<Base64>",
     "payload_original": { /* JSON enriquecido con dia_legible, hora_legible, enlaces acortados… */ }
   }
 }
 
-POST /bot/lead
+✨ Normalización de nombres
 
-Crea o actualiza un lead de forma independiente:
+Ahora, antes de procesar, los campos nombre y apellido se normalizan usando:
 
-curl -X POST http://<HOST>:4000/bot/lead \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "2",
-    "telefono": "+59179790873",
-    "instancia_evolution_api": "quiroz"
-  }'
+    utils/nameDictionary.js: más de 1000 nombres latinos.
 
-Respuesta esperada:
+    utils/nameUtils.js: lógica de mayúsculas, tildes, espacios y compuestos.
 
-{
-  "success": true,
-  "data": {
-    "lead_id": 123,
-    "user_id": "2",
-    "isNew": true
-  }
-}
-
-GET /bot/lead
-
-Busca un lead existente por teléfono e instancia:
-
-curl -G http://<HOST>:4000/bot/lead \
-  --data-urlencode "telefono=+59179790873" \
-  --data-urlencode "instancia_evolution_api=quiroz"
-
-Respuesta esperada:
-
-{
-  "success": true,
-  "data": {
-    "lead_id": 123,
-    "user_id": "2",
-    "nombre": "Sasha",
-    "apellido": "Quiroz",
-    "email": "sasha@example.com",
-    "fecha": "2025-06-20 15:30:00",
-    "zona_horaria": "America/La_Paz",
-    "fuente": null,
-    "ciudad": "Cochabamba",
-    "pais": "Bolivia",
-    "payload": { /* datos extra */ }
-  }
-}
+normalizeName('maria DEL Carmen')      // → 'María del Carmen'
+normalizeName('LUISangel')             // → 'Luis Ángel'
+normalizeSurname('perez GÓmez')        // → 'Pérez Gómez'
 
 ⚙️ Dependencias principales
 
@@ -145,11 +128,11 @@ Respuesta esperada:
 
     Express
 
-    moment-timezone (idioma ES)
+    moment-timezone (es)
 
-    mysql2 (MySQL async)
+    mysql2
 
-    @aws-sdk/client-s3 (MinIO)
+    @aws-sdk/client-s3
 
     ffmpeg-static + fluent-ffmpeg
 
@@ -160,28 +143,28 @@ Respuesta esperada:
     dotenv
 
 🐳 Despliegue
-Desarrollo (Docker Compose)
+Desarrollo
 
 docker-compose -f docker-compose-dev.yml up -d --build
 
-    Expone el servicio en el puerto 4000.
+    Expone el servicio en el puerto 4001.
 
-    Usa tu directorio local como volumen para desarrollo en caliente.
+    Volumen local para desarrollo en caliente.
 
-Producción (Docker Compose/Traefik)
+Producción
 
 docker-compose up -d --build
 
-    Expone el servicio en el puerto 4000.
+    Expuesto en puerto 4000.
 
-    Definido en docker-compose.yml junto a etiquetas de Traefik.
+    Integrado con Traefik en docker-compose.yml.
 
 🔐 Variables de entorno
 
 Defínelas en tu .env o en los bloques environment de los Docker Compose:
 
 # Puerto de la API
-PORT=4000
+PORT=4001
 
 # MinIO
 MINIO_ENDPOINT=
@@ -211,19 +194,18 @@ TTS_USE_SPEAKER_BOOST=true
 
 📝 Notas
 
-    Modularización: cada paso (preprocess, acortar, handleMensaje, handleEtapa, sendResponse) vive en su propio handler.
+    Modularidad: cada paso en su handler.
 
-    Configuración centralizada en config.js.
+    Configuración central en config.js.
 
-    Middleware global (errorHandler.js) captura y formatea errores.
+    Errores globales en middlewares/errorHandler.js.
 
-    Cache de URLs y detección de enlaces ya acortados.
+    Cache y manejo de duplicados en URL shortener.
 
-    Logs con contexto para facilitar depuración en producción.
+    Logs explícitos en cada etapa.
 
-    Futuro: tests automatizados e integración continua.
+    Personalización avanzada vía nameUtils + nameDictionary.
 
 📞 Contacto
 
-Proyecto desarrollado por Kurukin
-Soporte técnico: Javier Quiroz
+Kurukin – Proyecto desarrollado por Javier Quiroz.
