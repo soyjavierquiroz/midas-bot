@@ -1,69 +1,72 @@
 # 🤖 Midas Bot (v1.3)
 
-Microservicio modular en Node.js + Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Ahora con arquitectura handler-based, healthcheck, middleware de errores y configuración centralizada en `config.js`.
+Microservicio modular en Node.js y Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Ahora con:
 
-Incluye **normalización de nombres** mediante un diccionario de más de 1000 variantes hispanas (`nameDictionary.js`) y funciones de formato (`nameUtils.js`).
+- Arquitectura _handler-based_  
+- Healthcheck  
+- Middleware global de errores  
+- Configuración centralizada en `config.js`  
+- **Normalización de nombres** vía `utils/nameUtils.js` + diccionario (`utils/nameDictionary.js`)  
+- Soporte para plantillas propias de HTML (`payload.texto_html`)  
 
 ---
 
 ## 🧱 Estructura general
 
-```
 midas-bot/
 ├── controllers/
-│   ├── botController.js
-│   └── handlers/
-│       ├── preprocessPayload.js
-│       ├── acortarLinks.js
-│       ├── handleMensaje.js
-│       ├── handleEtapa.js
-│       └── sendResponse.js
+│ ├── botController.js
+│ └── handlers/
+│ ├── preprocessPayload.js
+│ ├── acortarLinks.js
+│ ├── handleMensaje.js
+│ ├── handleEtapa.js
+│ └── sendResponse.js
 ├── middlewares/
-│   └── errorHandler.js
+│ └── errorHandler.js
 ├── routes/
-│   ├── botRoutes.js
-│   └── testRoutes.js
+│ ├── botRoutes.js
+│ └── testRoutes.js
 ├── services/
-│   ├── dbService.js
-│   ├── leadService.js
-│   ├── etapaService.js
-│   ├── fusionService.js
-│   ├── minioService.js
-│   └── ttsService.js
+│ ├── dbService.js
+│ ├── leadService.js
+│ ├── etapaService.js
+│ ├── fusionService.js
+│ ├── minioService.js
+│ └── ttsService.js
 ├── utils/
-│   ├── textUtils.js
-│   ├── urlShortener.js
-│   ├── nameDictionary.js ← Diccionario inteligente de nombres (1000+ entradas)
-│   └── nameUtils.js ← Funciones para normalizar nombre y apellido
+│ ├── textUtils.js
+│ ├── urlShortener.js
+│ ├── nameDictionary.js ← Diccionario de 1000+ nombres latinos
+│ └── nameUtils.js ← Funciones de normalización
 ├── config.js
 ├── server.js
 ├── package.json
 ├── Dockerfile
 ├── docker-compose-dev.yml
 └── docker-compose.yml
-```
+
 
 ---
 
 ## 🚀 Endpoints
 
 ### `GET /health`  
-Comprueba que el servicio está arriba y funcionando:
+Comprueba el estado del servicio:
 
 ```bash
 curl http://<HOST>:4000/health
 # → { "status": "ok" }
-```
 
-### `POST /bot/etapa`  
-Flujo principal de procesamiento de etapa o mensaje directo. Requiere un payload mínimo como:
+POST /bot/etapa
 
-```bash
-curl -X POST "http://104.236.36.75:4001/bot/etapa" \
+Flujo principal (etapa o mensaje directo). Payload mínimo:
+
+curl -X POST "http://<HOST>:<PUERTO>/bot/etapa" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "2",
-    "nombre": "uan LUIS",
+    "nombre": "juan LUIS",
     "apellido": "PÉREZ GÓMEZ",
     "telefono": "+59179790873",
     "email": "test2@example.com",
@@ -74,84 +77,91 @@ curl -X POST "http://104.236.36.75:4001/bot/etapa" \
     "instancia_evolution_api": "prueba",
     "dominio": "prueba.com"
   }'
-```
 
-> Si el payload incluye `"mensaje": "..."`, se omite la etapa y se devuelve solo el HTML interpolado.
+    Si incluyes "mensaje": "...", se omite la etapa y solo se devuelve HTML interpolado.
 
-**Respuesta esperada:**
+Ejemplo de payload con plantilla propia:
 
-```json
+curl -X POST "http://<HOST>:<PUERTO>/bot/etapa" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "3",
+    "nombre": "Ana",
+    "apellido": "Pérez",
+    "telefono": "+59179790873",
+    "email": "test@example.com",
+    "etapa": "dunn",
+    "pais": "Bolivia",
+    "ciudad": "Cochabamba",
+    "zona_horaria": "America/La_Paz",
+    "instancia_evolution_api": "prueba",
+    "texto_html": "¡Hola <b>{nombre}</b>, bienvenido a la etapa de prueba! Visita {link}."
+  }'
+
+Respuesta esperada:
+
 {
   "success": true,
   "data": {
     "imagen_base64_puro": "<Base64>",
-    "texto_html": "🌸 Hola Juan Luis, tu sesión está confirmada...",
+    "texto_html": "¡Hola <b>Ana</b>, bienvenido a la etapa de prueba! Visita https://…",
     "audio_base64_puro": "<Base64>",
     "payload_original": { /* JSON enriquecido con dia_legible, hora_legible, enlaces acortados… */ }
   }
 }
-```
 
----
+✨ Normalización de nombres
 
-## ✨ Normalización de nombres
+Ahora, antes de procesar, los campos nombre y apellido se normalizan usando:
 
-Gracias al archivo `utils/nameDictionary.js` y las funciones de `utils/nameUtils.js`, el bot ahora puede:
+    utils/nameDictionary.js: más de 1000 nombres latinos.
 
-- Detectar errores comunes como `luiz → Luis`, `mria → María`, `juanluis → Juan Luis`.
-- Corregir tildes, espacios y mayúsculas.
-- Capitalizar correctamente nombres y apellidos, incluso si vienen mal escritos.
+    utils/nameUtils.js: lógica de mayúsculas, tildes, espacios y compuestos.
 
-### Ejemplo:
+normalizeName('maria DEL Carmen')      // → 'María del Carmen'
+normalizeName('LUISangel')             // → 'Luis Ángel'
+normalizeSurname('perez GÓmez')        // → 'Pérez Gómez'
 
-```js
-normalizeName('luiz') // → 'Luis'
-normalizeName('mariajose') // → 'María José'
-normalizeSurname('pérez gómez') // → 'Pérez Gómez'
-```
+⚙️ Dependencias principales
 
----
+    Node.js 18+
 
-## ⚙️ Dependencias principales
+    Express
 
-- Node.js 18+
-- Express
-- moment-timezone (idioma ES)
-- mysql2 (MySQL async)
-- @aws-sdk/client-s3 (MinIO)
-- ffmpeg-static + fluent-ffmpeg
-- axios + form-data
-- uuid
-- dotenv
+    moment-timezone (es)
 
----
+    mysql2
 
-## 🐳 Despliegue
+    @aws-sdk/client-s3
 
-### Desarrollo (Docker Compose)
+    ffmpeg-static + fluent-ffmpeg
 
-```bash
+    axios + form-data
+
+    uuid
+
+    dotenv
+
+🐳 Despliegue
+Desarrollo
+
 docker-compose -f docker-compose-dev.yml up -d --build
-```
 
-- Expone el servicio en el puerto `4001`.
-- Usa tu directorio local como volumen para desarrollo en caliente.
+    Expuesto en puerto 4001.
 
-### Producción (Docker Compose/Traefik)
+    Volumen local para desarrollo en caliente.
 
-```bash
+Producción
+
 docker-compose up -d --build
-```
 
-- Expone el servicio en el puerto `4000`.
-- Definido en `docker-compose.yml` junto a etiquetas de Traefik.
+    Expuesto en puerto 4000.
 
----
+    Integrado con Traefik en docker-compose.yml.
 
-## 🔐 Variables de entorno
+🔐 Variables de entorno
 
-```env
-# Puerto de la API
+# API
 PORT=4001
 
 # MinIO
@@ -179,22 +189,21 @@ TTS_STABILITY=0.5
 TTS_SIMILARITY_BOOST=0.7
 TTS_STYLE=0.8
 TTS_USE_SPEAKER_BOOST=true
-```
 
----
+📝 Notas
 
-## 📝 Notas
+    Modularidad: cada paso en su handler.
 
-- Modularización clara: cada paso vive en su propio handler.
-- Configuración centralizada (`config.js`).
-- Middleware global de errores (`errorHandler.js`).
-- Detección y cache de URLs ya acortadas.
-- Logs con contexto.
-- nameUtils + nameDictionary mejoran la personalización en respuestas TTS/HTML.
+    Configuración central en config.js.
 
----
+    Errores globales en middlewares/errorHandler.js.
 
-## 📞 Contacto
+    Cache y manejo de duplicados en URL shortener.
 
-Proyecto desarrollado por **Kurukin**  
-Soporte técnico: **Javier Quiroz**
+    Logs explícitos en cada etapa.
+
+    Personalización avanzada vía nameUtils + nameDictionary.
+
+📞 Contacto
+
+Kurukin – Proyecto desarrollado por Javier Quiroz.
