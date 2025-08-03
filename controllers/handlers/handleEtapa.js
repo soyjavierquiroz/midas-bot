@@ -1,20 +1,17 @@
-// controllers/handlers/handleEtapa.js
-
 const etapaService                    = require('../../services/etapaService');
-const minioService                    = require('../../services/minioService');
-const ttsService                      = require('../../services/ttsService');
-const fusionService                   = require('../../services/fusionService');
-const { reemplazarVariables }         = require('../../utils/textUtils');
-const { acortarLinks }                = require('./acortarLinks');
-// --- NEW: importar función para recuperar lead si falta nombre ---
-const { findLeadByPhoneAndInstance }  = require('../../services/leadService');
+const minioService                   = require('../../services/minioService');
+const ttsService                     = require('../../services/ttsService');
+const fusionService                  = require('../../services/fusionService');
+const { reemplazarVariables }        = require('../../utils/textUtils');
+const { acortarLinks }               = require('./acortarLinks');
+const { findLeadByPhoneAndInstance } = require('../../services/leadService'); // NEW
 
 /**
  * Orquesta el flujo completo de “etapa”:
  * 1) Valida payload  
  * 2) Acorta e interpola enlaces  
  * 3) Recupera datos de etapa  
- * 4) Selecciona texto aleatorio, reemplaza variables  
+ * 4) Selecciona texto (plano + HTML), reemplaza variables  
  * 5) Genera audio TTS + fusiona con audio base  
  * 6) Descarga imagen y la codifica en Base64  
  *
@@ -36,7 +33,7 @@ async function handleEtapa(payload) {
   }
   console.log(`🔄 handleEtapa: iniciando (user_id=${payload.user_id}, etapa=${payload.etapa})`);
 
-  // --- NEW: Si no viene nombre en el payload, intentar recuperarlo de la DB ---
+  // --- NEW: Si no viene nombre/apellido en el payload, intentar recuperarlos de la DB ---
   if (!payload.nombre || !payload.nombre.trim()) {
     try {
       const lead = await findLeadByPhoneAndInstance(
@@ -45,13 +42,13 @@ async function handleEtapa(payload) {
       );
       if (lead && lead.nombre) {
         payload.nombre   = lead.nombre;
-        payload.apellido = lead.apellido; // también rellenamos apellido
+        payload.apellido = lead.apellido;
         console.log(
           '🔄 handleEtapa: nombre/apellido recuperados de DB →',
           payload.nombre, payload.apellido
         );
       } else {
-        console.warn('⚠️ handleEtapa: nombre no enviado y lead no encontrado en DB');
+        console.warn('⚠️ handleEtapa: nombre/apellido no enviados y lead no existe o nombre NULL');
       }
     } catch (err) {
       console.warn('⚠️ handleEtapa: error al recuperar lead de DB', err);
@@ -88,8 +85,7 @@ async function handleEtapa(payload) {
   const idx2 = Math.floor(Math.random() * textosHtml.length);
   let textoHtmlOriginal;
   if (typeof payload.texto_html === 'string' && payload.texto_html.trim() !== '') {
-    // --- MODIFIED: usar payload.texto_html en lugar de la base de datos ---
-    textoHtmlOriginal = payload.texto_html;
+    textoHtmlOriginal = payload.texto_html;                                   // MODIFIED
     console.log('🔄 handleEtapa: usando texto_html del payload en lugar de la base de datos');
   } else {
     textoHtmlOriginal = textosHtml[idx2] || '';

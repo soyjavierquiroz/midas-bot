@@ -1,5 +1,3 @@
-// utils/textUtils.js
-
 /**
  * Utilidades para formateo de fechas y reemplazo de variables en plantillas.
  */
@@ -35,7 +33,8 @@ function generarVariablesFecha(data) {
 
 /**
  * Reemplaza todos los placeholders {key} en un template por data[key].
- * Si falta la clave o está vacía, inserta '*' y avisa por consola.
+ * - Si falta nombre o apellido, los elimina (cadena vacía).
+ * - Si falta cualquier otra clave, inserta '*' y avisa por consola.
  *
  * @param {string} template - Texto con placeholders en forma {key}.
  * @param {Object} data     - Objeto con los valores para reemplazar.
@@ -46,10 +45,18 @@ function reemplazarVariables(template, data) {
 
   return String(template).replace(/{(.*?)}/g, (match, key) => {
     const value = enriched[key];
+
+    // Si es nombre o apellido y no viene/está vacío, lo quitamos
+    if ((key === 'nombre' || key === 'apellido') && (!value || value === '')) {
+      return '';
+    }
+
+    // Para cualquier otra clave faltante, mantenemos el '*' de advertencia
     if (value === undefined || value === '') {
       console.warn(`⚠️ Variable {${key}} no encontrada o vacía. Reemplazando por '*'`);
       return '*';
     }
+
     return value;
   });
 }
