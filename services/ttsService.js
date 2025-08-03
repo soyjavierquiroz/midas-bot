@@ -20,32 +20,38 @@ async function generarAudioTTS(texto, override = {}) {
     similarity_boost: oSimilarityBoost,
     style: oStyle,
     speaker_boost: oSpeakerBoost,
+    voice_speed: oVoiceSpeed,            // ← NUEVO: destructuramos voice_speed
   } = override;
 
   // Fallback: si no viene en override, usamos la config de env
-  const apiKey               = oApiKey             || envTts.apiKey;
-  const voiceId              = oVoiceId            || envTts.voiceId;
-  const modelId              = oModelId            || envTts.modelId;
-  const stabilityUsed        = oStability ?? envTts.stability;
-  const similarityBoostUsed  = oSimilarityBoost ?? envTts.similarityBoost;
-  const styleUsed            = oStyle      ?? envTts.style;
-  const speakerBoostUsed     = oSpeakerBoost ?? envTts.speakerBoost;
+  const apiKey              = oApiKey             || envTts.apiKey;
+  const voiceId             = oVoiceId            || envTts.voiceId;
+  const modelId             = oModelId            || envTts.modelId;
+  const stabilityUsed       = oStability  ?? envTts.stability;
+  const similarityBoostUsed = oSimilarityBoost ?? envTts.similarityBoost;
+  const styleUsed           = oStyle      ?? envTts.style;
+  const speakerBoostUsed    = oSpeakerBoost ?? envTts.speakerBoost;
+  const speedUsed           = oVoiceSpeed ?? envTts.voiceSpeed ?? 1.0;
+  //                                     ↑ buscamos override.voice_speed
+  //                                     ↑ o caemos en envTts.voiceSpeed
+  //                                     ↑ o, de último recurso, 1.0
 
   const payload = {
     text: texto,
     model_id: modelId,
     voice_settings: {
-      stability: stabilityUsed,
-      similarity_boost: similarityBoostUsed,
-      style: styleUsed,
+      stability:         stabilityUsed,
+      similarity_boost:  similarityBoostUsed,
+      style:             styleUsed,
       use_speaker_boost: speakerBoostUsed,
+      speed:             speedUsed,        // ← NUEVO: añadimos speed al payload
     },
   };
 
   console.log('🔤 Texto para TTS:', texto);
   console.log('🎛 Modelo:', modelId);
   console.log('🔊 Voz:', voiceId);
-  console.log('🧪 Parámetros:', payload.voice_settings);
+  console.log('🧪 Parámetros:', { ...payload.voice_settings });
 
   try {
     const response = await axios.post(
@@ -62,7 +68,7 @@ async function generarAudioTTS(texto, override = {}) {
     console.log('✅ Audio TTS generado correctamente');
     return Buffer.from(response.data);
   } catch (err) {
-    const status = err.response?.status;
+    const status  = err.response?.status;
     const rawData = err.response?.data?.toString('utf8');
     console.error('❌ ElevenLabs TTS failed with status:', status);
     console.error('❌ Response data:', rawData);
