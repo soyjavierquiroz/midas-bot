@@ -2,22 +2,33 @@
 
 const pool = require('./dbService');
 
+/** Extrae host (sin www.) de una URL; retorna '' si no es válida */
+function getDomainFromUrl(url) {
+  if (!url) return '';
+  try {
+    const host = new URL(url).host || '';
+    return host.startsWith('www.') ? host.slice(4) : host;
+  } catch {
+    return '';
+  }
+}
+
 /**
- * Inserta o actualiza un lead según teléfono y instancia de Evolution API.
- * Al actualizar un lead existente, **solo** fusiona el campo `payload`:
- *  - acumula etapas y dominios en arrays (sin duplicados)
- *  - incorpora nuevos extras (pero **no** mensaje ni texto_html)
- *  - no sobreescribe nombre/apellido/email/etc.
+ * Inserta o actualiza un lead según (telefono, instancia_evolution_api).
+ * @param {Object} leadData
+ * @returns {{leadId: number, userId: number, isNew: boolean}}
  */
 async function upsertLead(leadData) {
-  const telefonoRaw = String(leadData.telefono || '');
-  const telefono    = telefonoRaw.startsWith('+') ? telefonoRaw.slice(1) : telefonoRaw;
-  const instancia   = leadData.instancia_evolution_api;
-  const dominio     = leadData.dominio;
+  // 1) Normalizar teléfono (quitar '+' inicial)
+  const telefono = leadData.telefono?.startsWith('+')
+    ? leadData.telefono.slice(1)
+    : leadData.telefono;
+  const instancia = leadData.instancia_evolution_api;
 
-  // Campos "naturales" vs. extras
+  // 2) Separar campos fijos y resto
   const {
     user_id,
+    dominio: dominioRaw, // ← puede venir vacío/undefined
     nombre,
     apellido,
     email,
@@ -26,127 +37,71 @@ async function upsertLead(leadData) {
     fuente,
     ciudad,
     pais,
-    // dejamos pasar todo lo demás a `extras`
-    ...extras
+    link,
+    meet,
+    zoom,
+    ...rest
   } = leadData;
 
-  try {
-    // 1) ¿Lead existe ya?
-    const [rows] = await pool.query(
-      `SELECT lead_id, payload
-         FROM wa_bot_leads
-        WHERE telefono = ? AND instancia_evolution_api = ?
-        LIMIT 1`,
-      [telefono, instancia]
+  // 2.1) Fallback de dominio (NO NULL): tomar de payload.dominio o del host de link/meet/zoom o ''
+  const dominio =
+    (dominioRaw && String(dominioRaw).trim()) ||
+    getDomainFromUrl(link) ||
+    getDomainFromUrl(meet) ||
+    getDomainFromUrl(zoom) ||
+    '';
+
+  const payloadExtra = Object.keys(rest).length ? JSON.stringify(rest) : null;
+
+  // 3) Comprobar si ya existe
+  const [rows] = await pool.query(
+    `SELECT lead_id
+       FROM wa_bot_leads
+      WHERE telefono = ? AND instancia_evolution_api = ?
+      LIMIT 1`,
+    [telefono, instancia]
+  );
+
+  if (rows.length) {
+    // 4a) Actualizar registro existente (mantenemos dominio intacto)
+    const leadId = rows[0].lead_id;
+    await pool.query(
+      `UPDATE wa_bot_leads SET
+         user_id       = ?,
+         nombre        = ?,
+         apellido      = ?,
+         email         = ?,
+         fecha         = ?,
+         zona_horaria  = ?,
+         fuente        = ?,
+         ciudad        = ?,
+         pais          = ?,
+         payload       = ?,
+         updated_at    = CURRENT_TIMESTAMP
+       WHERE lead_id = ?`,
+      [user_id, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payloadExtra, leadId]
     );
-
-    if (rows.length) {
-      // —————————————————————
-      // Lead existente: fusionar únicamente el payload
-      // —————————————————————
-      const { lead_id: leadId, payload: rawPayload } = rows[0];
-
-      // parseo seguro de JSON antiguo
-      let existingPayload = {};
-      try {
-        existingPayload = rawPayload ? JSON.parse(rawPayload) : {};
-      } catch {
-        console.warn('⚠️ upsertLead: payload previo inválido, se inicia uno nuevo.');
-      }
-
-      // 2) Acumular etapas
-      if (leadData.etapa) {
-        existingPayload.etapas = Array.isArray(existingPayload.etapas)
-          ? existingPayload.etapas
-          : [];
-        if (!existingPayload.etapas.includes(leadData.etapa)) {
-          existingPayload.etapas.push(leadData.etapa);
-        }
-      }
-
-      // 3) Acumular dominios
-      if (dominio) {
-        existingPayload.dominios = Array.isArray(existingPayload.dominios)
-          ? existingPayload.dominios
-          : [];
-        if (!existingPayload.dominios.includes(dominio)) {
-          existingPayload.dominios.push(dominio);
-        }
-      }
-
-      // 4) Incorporar otros extras, **excepto** mensaje y texto_html
-      for (const [key, val] of Object.entries(extras)) {
-        if (key === 'mensaje' || key === 'texto_html') continue;
-        if (val != null && existingPayload[key] === undefined) {
-          existingPayload[key] = val;
-        }
-      }
-
-      const newPayload = JSON.stringify(existingPayload);
-
-      // 5) Solo actualizamos payload y updated_at
-      await pool.query(
-        `UPDATE wa_bot_leads
-            SET payload    = ?,
-                updated_at = CURRENT_TIMESTAMP
-          WHERE lead_id = ?`,
-        [newPayload, leadId]
-      );
-
-      console.log(`✅ upsertLead: lead existente (ID ${leadId}), payload fusionado.`);
-      return { leadId, userId: user_id, isNew: false };
-    }
-
-    // —————————————————————
-    // Lead nuevo: payload inicial con etapa y dominio
-    // —————————————————————
-    const initialPayload = {
-      ...extras,                // aquí extras **no** tiene mensaje ni texto_html
-      etapas:    leadData.etapa ? [leadData.etapa] : [],
-      dominios: dominio      ? [dominio]         : []
-    };
-
-    const [insertResult] = await pool.query(
+    return { leadId, userId: user_id, isNew: false };
+  } else {
+    // 4b) Insertar nuevo lead (dominio NUNCA NULL)
+    const [result] = await pool.query(
       `INSERT INTO wa_bot_leads
-         (user_id, telefono, dominio, instancia_evolution_api,
-          nombre, apellido, email, fecha, zona_horaria,
-          fuente, ciudad, pais, payload)
+         (user_id, telefono, dominio, instancia_evolution_api, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payload)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        user_id,
-        telefono,
-        dominio,
-        instancia,
-        nombre,
-        apellido,
-        email,
-        fecha,
-        zona_horaria,
-        fuente,
-        ciudad,
-        pais,
-        JSON.stringify(initialPayload)
-      ]
+      [user_id, telefono, dominio, instancia, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payloadExtra]
     );
-
-    console.log(`➕ upsertLead: lead nuevo creado (ID ${insertResult.insertId}).`);
-    return { leadId: insertResult.insertId, userId: user_id, isNew: true };
-
-  } catch (err) {
-    console.error(
-      `❌ Error en upsertLead (telefono=${telefono}, instancia=${instancia}):`,
-      err
-    );
-    throw new Error('Error al insertar o actualizar lead');
+    return { leadId: result.insertId, userId: user_id, isNew: true };
   }
 }
 
 /**
- * Busca un lead por teléfono e instancia de Evolution API.
+ * Busca un lead por teléfono + instancia_evolution_api.
+ * @param {string} telefono
+ * @param {string} instancia
+ * @returns {Object|null}
  */
 async function findLeadByPhoneAndInstance(telefono, instancia) {
-  const telRaw = String(telefono || '');
-  const tel    = telRaw.startsWith('+') ? telRaw.slice(1) : telRaw;
+  const tel = telefono.startsWith('+') ? telefono.slice(1) : telefono;
   const [rows] = await pool.query(
     `SELECT
        lead_id,
@@ -170,6 +125,9 @@ async function findLeadByPhoneAndInstance(telefono, instancia) {
 
 /**
  * Registra una nueva etapa en el historial del lead.
+ * @param {number} leadId
+ * @param {string} etapa
+ * @param {Object|null} metadata
  */
 async function addLeadStage(leadId, etapa, metadata = null) {
   const meta = metadata ? JSON.stringify(metadata) : null;
@@ -184,5 +142,5 @@ async function addLeadStage(leadId, etapa, metadata = null) {
 module.exports = {
   upsertLead,
   findLeadByPhoneAndInstance,
-  addLeadStage
+  addLeadStage,
 };
