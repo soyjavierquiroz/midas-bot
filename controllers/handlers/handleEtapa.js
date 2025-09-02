@@ -5,38 +5,16 @@ const minioService                   = require('../../services/minioService');
 const ttsService                     = require('../../services/ttsService');
 const fusionService                  = require('../../services/fusionService');
 const { reemplazarVariables }        = require('../../utils/textUtils');
-const { findLeadByPhoneAndInstance } = require('../../services/leadService'); // (se mantiene)
+const { findLeadByPhoneAndInstance } = require('../../services/leadService');
 
-/**
- * Orquesta el flujo completo de “etapa”:
- * 1) Valida payload
- * 2) (acortarLinks se ejecuta en botController)
- * 3) Recupera datos de etapa
- * 4) Selecciona texto (plano + HTML), reemplaza variables
- * 5) Genera audio TTS + fusiona con audio base
- * 6) Descarga imagen y la codifica en Base64
- *
- * @param {object}  payload
- * @param {string}  payload.user_id
- * @param {string}  payload.etapa
- * @returns {Promise<{ textoHtml: string, audioFusionado: Buffer|null, imagenBase64: string }>}
- * @throws {{ status: number, message: string }}
- */
 async function handleEtapa(payload) {
-  // 1) Validación inicial
   if (!payload.user_id || !payload.etapa) {
     console.error('🚫 handleEtapa: faltan campos user_id o etapa', payload);
     throw { status: 400, message: 'Faltan campos obligatorios: user_id, etapa' };
   }
   console.log(`🔄 handleEtapa: iniciando (user_id=${payload.user_id}, etapa=${payload.etapa})`);
 
-  // ──────────────────────────────────────────────────────────────────────────────
-  // IMPORTANTE:
-  // NO llamamos a acortarLinks(payload) aquí, para evitar doble acortado.
-  // Esa función ya se ejecuta en botController.procesarEtapa ANTES de entrar aquí.
-  // ──────────────────────────────────────────────────────────────────────────────
-
-  // Si no viene nombre/apellido en el payload, intentar recuperarlos de la DB
+  // Si no viene nombre/apellido, intentar recuperarlos de DB
   if (!payload.nombre || !payload.nombre.trim()) {
     try {
       const lead = await findLeadByPhoneAndInstance(
@@ -55,7 +33,7 @@ async function handleEtapa(payload) {
     }
   }
 
-  // 3) Obtener datos de la etapa
+  // 1) Obtener datos de la etapa
   const etapa = await etapaService.obtenerEtapa(payload.user_id, payload.etapa);
   if (!etapa) {
     console.error(`🚫 handleEtapa: etapa no encontrada (user_id=${payload.user_id}, etapa=${payload.etapa})`);
@@ -63,55 +41,52 @@ async function handleEtapa(payload) {
   }
   console.log(`✅ Etapa encontrada: user_id=${etapa.user_id}, nombre=${etapa.nombre}`);
 
-  // 4) Parsear y limpiar arrays de textos
+  // 2) Parsear textos
   let textos = [], textosHtml = [];
   try { textos     = JSON.parse(etapa.textos     || '[]').filter(Boolean); }
   catch (e) { console.warn('⚠️ handleEtapa: error parseando etapa.textos', e); }
   try { textosHtml = JSON.parse(etapa.textos_html|| '[]').filter(Boolean); }
   catch (e) { console.warn('⚠️ handleEtapa: error parseando etapa.textos_html', e); }
 
-  // Selección aleatoria de texto plano
   const idx1               = Math.floor(Math.random() * textos.length);
   const textoPlanoOriginal = textos[idx1] || '';
-  console.log(`📄 Texto plano [${idx1}]:`, textoPlanoOriginal);
+  const idx2               = Math.floor(Math.random() * textosHtml.length);
 
-  // Selección de HTML: override si viene texto_html en payload
-  const idx2 = Math.floor(Math.random() * textosHtml.length);
   let textoHtmlOriginal;
   if (typeof payload.texto_html === 'string' && payload.texto_html.trim() !== '') {
     textoHtmlOriginal = payload.texto_html;
     console.log('🔄 handleEtapa: usando texto_html del payload en lugar de la base de datos');
   } else {
     textoHtmlOriginal = textosHtml[idx2] || '';
-    console.log(`📄 Texto HTML [${idx2}]:`, textoHtmlOriginal);
   }
 
-  // 6) Reemplazar variables en texto plano y HTML
+  // 3) Reemplazar variables
   const textoPlano = reemplazarVariables(textoPlanoOriginal, payload);
   const textoHtml  = reemplazarVariables(textoHtmlOriginal,  payload);
 
-  // 7) Generar audio TTS + fusión con audio base
+  // 4) TTS + (opcional) fusión con audio base
   const configTTS     = await etapaService.obtenerConfigTTS(payload.user_id);
   let audioFusionado  = null;
+
   if (textoPlano) {
     const audioTTS = await ttsService.generarAudioTTS(textoPlano, configTTS);
-    console.log(`🔊 Audio TTS generado (${audioTTS.length} bytes)`);
 
-    const audioBase = await minioService.obtenerAudioAleatorio(payload.user_id, payload.etapa);
-    console.log(`🔊 Audio base descargado (${audioBase.length} bytes)`);
-
-    audioFusionado = await fusionService.fusionarAudios(audioTTS, audioBase);
-    console.log(`🔊 Audio fusionado (${audioFusionado.length} bytes)`);
+    try {
+      const audioBase = await minioService.obtenerAudioAleatorio(payload.user_id, payload.etapa);
+      audioFusionado = await fusionService.fusionarAudios(audioTTS, audioBase);
+    } catch (err) {
+      console.warn('⚠️ TTS sin fusión (no hay audio base o falló ffmpeg):', err?.message || err);
+      audioFusionado = audioTTS; // fallback: TTS puro
+    }
   } else {
     console.log('ℹ️ handleEtapa: textoPlano vacío, salto generación de TTS');
   }
 
-  // 8) Descargar imagen y codificar en Base64
+  // 5) Imagen
   const imagenKey    = `imagenes_etapa/${payload.user_id}_${payload.etapa}.jpg`;
   const imagenBase64 = await minioService.getImageBase64('bot-uploads', imagenKey);
-  console.log(`🖼 Imagen obtenida (${imagenBase64.length} chars)`);
 
-  console.log('✅ handleEtapa: flujo completado correctamente');
+  console.log('✅ handleEtapa: flujo completado');
   return { textoHtml, audioFusionado, imagenBase64 };
 }
 

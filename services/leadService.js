@@ -2,6 +2,9 @@
 
 const pool = require('./dbService');
 
+/** Normaliza string: trim; null/undefined -> '' si se necesita NOT NULL */
+const nn = (v) => (v === undefined || v === null ? '' : String(v).trim());
+
 /** Extrae host (sin www.) de una URL; retorna '' si no es válida */
 function getDomainFromUrl(url) {
   if (!url) return '';
@@ -14,129 +17,148 @@ function getDomainFromUrl(url) {
 }
 
 /**
- * Inserta o actualiza un lead según (telefono, instancia_evolution_api).
- * @param {Object} leadData
- * @returns {{leadId: number, userId: number, isNew: boolean}}
+ * Devuelve un set de candidatos de teléfono para búsqueda:
+ * - tal cual llega (trim)
+ * - sin espacios
+ * - solo dígitos
+ * - con '+' + solo dígitos
  */
-async function upsertLead(leadData) {
-  // 1) Normalizar teléfono (quitar '+' inicial)
-  const telefono = leadData.telefono?.startsWith('+')
-    ? leadData.telefono.slice(1)
-    : leadData.telefono;
-  const instancia = leadData.instancia_evolution_api;
+function buildPhoneCandidates(raw) {
+  const tel = String(raw || '').trim();
+  const noSpaces = tel.replace(/\s+/g, '');
+  const digits = noSpaces.replace(/\D+/g, '');
+  const withPlus = digits ? `+${digits}` : '';
 
-  // 2) Separar campos fijos y resto
-  const {
-    user_id,
-    dominio: dominioRaw, // ← puede venir vacío/undefined
-    nombre,
-    apellido,
-    email,
-    fecha,
-    zona_horaria,
-    fuente,
-    ciudad,
-    pais,
-    link,
-    meet,
-    zoom,
-    ...rest
-  } = leadData;
+  const candidates = [];
+  const pushUniq = (v) => {
+    if (v && !candidates.includes(v)) candidates.push(v);
+  };
 
-  // 2.1) Fallback de dominio (NO NULL): tomar de payload.dominio o del host de link/meet/zoom o ''
-  const dominio =
-    (dominioRaw && String(dominioRaw).trim()) ||
-    getDomainFromUrl(link) ||
-    getDomainFromUrl(meet) ||
-    getDomainFromUrl(zoom) ||
-    '';
+  pushUniq(tel);
+  pushUniq(noSpaces);
+  pushUniq(digits);
+  pushUniq(withPlus);
 
-  const payloadExtra = Object.keys(rest).length ? JSON.stringify(rest) : null;
+  return candidates;
+}
 
-  // 3) Comprobar si ya existe
-  const [rows] = await pool.query(
-    `SELECT lead_id
-       FROM wa_bot_leads
-      WHERE telefono = ? AND instancia_evolution_api = ?
-      LIMIT 1`,
-    [telefono, instancia]
-  );
+/** Canonicaliza teléfono para almacenar: +[solo dígitos] si es posible */
+function canonicalizePhoneForStore(raw) {
+  const digits = String(raw || '').replace(/\D+/g, '');
+  return digits ? `+${digits}` : nn(raw);
+}
 
-  if (rows.length) {
-    // 4a) Actualizar registro existente (mantenemos dominio intacto)
-    const leadId = rows[0].lead_id;
-    await pool.query(
-      `UPDATE wa_bot_leads SET
-         user_id       = ?,
-         nombre        = ?,
-         apellido      = ?,
-         email         = ?,
-         fecha         = ?,
-         zona_horaria  = ?,
-         fuente        = ?,
-         ciudad        = ?,
-         pais          = ?,
-         payload       = ?,
-         updated_at    = CURRENT_TIMESTAMP
-       WHERE lead_id = ?`,
-      [user_id, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payloadExtra, leadId]
-    );
-    return { leadId, userId: user_id, isNew: false };
-  } else {
-    // 4b) Insertar nuevo lead (dominio NUNCA NULL)
-    const [result] = await pool.query(
-      `INSERT INTO wa_bot_leads
-         (user_id, telefono, dominio, instancia_evolution_api, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payload)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [user_id, telefono, dominio, instancia, nombre, apellido, email, fecha, zona_horaria, fuente, ciudad, pais, payloadExtra]
-    );
-    return { leadId: result.insertId, userId: user_id, isNew: true };
+/**
+ * Busca un lead por teléfono e instancia (robusto a +/espacios/dígitos).
+ * Retorna objeto con `id` (alias de lead_id) o null.
+ */
+async function findLeadByPhoneAndInstance(telefono, instancia) {
+  try {
+    const inst = String(instancia || '').trim();
+    if (!inst) return null;
+
+    const phones = buildPhoneCandidates(telefono);
+    for (const ph of phones) {
+      if (!ph) continue;
+      const [rows] = await pool.query(
+        `SELECT
+           lead_id AS id, user_id, telefono, instancia_evolution_api,
+           nombre, apellido, dominio, email, fecha, zona_horaria,
+           fuente, ciudad, pais, payload, created_at, updated_at
+         FROM wa_bot_leads
+         WHERE telefono = ? AND instancia_evolution_api = ?
+         LIMIT 1`,
+        [ph, inst]
+      );
+      if (rows && rows[0]) return rows[0];
+    }
+    return null;
+  } catch (err) {
+    console.warn('⚠️ findLeadByPhoneAndInstance falló:', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
+    return null;
   }
 }
 
 /**
- * Busca un lead por teléfono + instancia_evolution_api.
- * @param {string} telefono
- * @param {string} instancia
- * @returns {Object|null}
+ * Upsert del lead (INSERT ... ON DUPLICATE KEY UPDATE).
+ * - Clave de negocio: UNIQUE(telefono, instancia_evolution_api)
+ * - Nunca lanza: en error, loguea y devuelve { leadId: existingId|null }.
  */
-async function findLeadByPhoneAndInstance(telefono, instancia) {
-  const tel = telefono.startsWith('+') ? telefono.slice(1) : telefono;
-  const [rows] = await pool.query(
-    `SELECT
-       lead_id,
-       user_id,
-       nombre,
-       apellido,
-       email,
-       fecha,
-       zona_horaria,
-       fuente,
-       ciudad,
-       pais,
-       payload
-     FROM wa_bot_leads
-     WHERE telefono = ? AND instancia_evolution_api = ?
-     LIMIT 1`,
-    [tel, instancia]
-  );
-  return rows[0] || null;
+async function upsertLead(payload) {
+  const telefonoRaw = payload?.telefono;
+  const instancia = nn(payload?.instancia_evolution_api);
+  const userId = payload?.user_id ? Number(payload.user_id) : null;
+
+  if (!telefonoRaw || !instancia) {
+    console.warn('⚠️ upsertLead: faltan telefono o instancia_evolution_api; no se realiza acción');
+    return { leadId: null };
+  }
+
+  // Teléfono canónico para almacenar (ej: +59179790873)
+  const telefono = canonicalizePhoneForStore(telefonoRaw);
+
+  // Fallback de dominio: host(link/meet/zoom) o '' (no NULL)
+  const dominio =
+    nn(payload?.dominio) ||
+    getDomainFromUrl(payload?.link) ||
+    getDomainFromUrl(payload?.meet) ||
+    getDomainFromUrl(payload?.zoom) ||
+    '';
+
+  const nombre = payload?.nombre ? String(payload.nombre).trim() : null;
+  const apellido = payload?.apellido ? String(payload.apellido).trim() : null;
+
+  const sql = `
+    INSERT INTO wa_bot_leads
+      (user_id, telefono, instancia_evolution_api, nombre, apellido, dominio)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      user_id = VALUES(user_id),
+      nombre = IF(VALUES(nombre) IS NULL OR VALUES(nombre) = '', nombre, VALUES(nombre)),
+      apellido = IF(VALUES(apellido) IS NULL OR VALUES(apellido) = '', apellido, VALUES(apellido)),
+      dominio = IFNULL(VALUES(dominio), dominio)
+  `;
+  const params = [userId, telefono, instancia, nombre, apellido, dominio];
+
+  try {
+    const [result] = await pool.query(sql, params);
+    if (result && result.insertId > 0) {
+      return { leadId: result.insertId }; // inserción nueva
+    }
+    // duplicate key update → buscar id existente con candidatos (por si el guardado previo no estaba canónico)
+    const existing = await findLeadByPhoneAndInstance(telefono, instancia);
+    return { leadId: existing?.id ?? null };
+  } catch (err) {
+    console.warn('⚠️ upsertLead error (continuamos):', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
+    if (err?.code === 'ER_DUP_ENTRY') {
+      const existing = await findLeadByPhoneAndInstance(telefono, instancia);
+      return { leadId: existing?.id ?? null };
+    }
+    const existing = await findLeadByPhoneAndInstance(telefono, instancia);
+    return { leadId: existing?.id ?? null };
+  }
 }
 
 /**
- * Registra una nueva etapa en el historial del lead.
- * @param {number} leadId
- * @param {string} etapa
- * @param {Object|null} metadata
+ * Registra una etapa para el lead, de forma tolerante.
+ * - Nunca lanza: loguea y sigue.
  */
 async function addLeadStage(leadId, etapa, metadata = null) {
-  const meta = metadata ? JSON.stringify(metadata) : null;
-  await pool.query(
-    `INSERT INTO wa_bot_lead_stages
-       (lead_id, etapa, metadata)
-     VALUES (?, ?, ?)`,
-    [leadId, etapa, meta]
-  );
+  if (!leadId || !etapa) {
+    console.warn('⚠️ addLeadStage: faltan leadId o etapa; no se inserta historial');
+    return;
+  }
+  try {
+    const meta = metadata ? JSON.stringify(metadata) : null;
+    await pool.query(
+      `INSERT INTO wa_bot_lead_stages
+         (lead_id, etapa, metadata)
+       VALUES (?, ?, ?)`,
+      [leadId, etapa, meta]
+    );
+  } catch (err) {
+    console.warn('⚠️ addLeadStage falló (continuamos):', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
+  }
 }
 
 module.exports = {
