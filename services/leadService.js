@@ -16,13 +16,7 @@ function getDomainFromUrl(url) {
   }
 }
 
-/**
- * Genera candidatos de teléfono para búsqueda:
- * - tal cual llega (trim)
- * - sin espacios
- * - solo dígitos
- * - con '+' + solo dígitos
- */
+/** Candidatos de teléfono para búsquedas (tolerante a +, espacios, etc.) */
 function buildPhoneCandidates(raw) {
   const tel = String(raw || '').trim();
   const noSpaces = tel.replace(/\s+/g, '');
@@ -30,9 +24,7 @@ function buildPhoneCandidates(raw) {
   const withPlus = digits ? `+${digits}` : '';
 
   const candidates = [];
-  const pushUniq = (v) => {
-    if (v && !candidates.includes(v)) candidates.push(v);
-  };
+  const pushUniq = (v) => { if (v && !candidates.includes(v)) candidates.push(v); };
 
   pushUniq(tel);
   pushUniq(noSpaces);
@@ -42,15 +34,14 @@ function buildPhoneCandidates(raw) {
   return candidates;
 }
 
-/** Canonicaliza teléfono para almacenar: +[solo dígitos] si es posible */
+/** Teléfono canon para ALMACENAR: solo dígitos (sin +) */
 function canonicalizePhoneForStore(raw) {
-  const digits = String(raw || '').replace(/\D+/g, '');
-  return digits ? `+${digits}` : nn(raw);
+  return String(raw || '').replace(/\D+/g, '');
 }
 
 /**
- * Busca un lead por teléfono e instancia (robusto a +/espacios/dígitos).
- * Retorna objeto con `id` (alias de lead_id) o null.
+ * Busca un lead por teléfono + instancia (compatibilidad)
+ * Intenta variantes de teléfono.
  */
 async function findLeadByPhoneAndInstance(telefono, instancia) {
   try {
@@ -89,11 +80,7 @@ async function findLeadByPhoneAndInstance(telefono, instancia) {
   }
 }
 
-/**
- * NEW: Busca por la combinación de negocio
- * (user_id, telefono, instancia_evolution_api, dominio)
- * probando variantes de teléfono.
- */
+/** Busca por (user_id, telefono, instancia, dominio) probando variantes de teléfono */
 async function findLeadByComposite(userId, telefono, instancia, dominio) {
   try {
     const uid = Number(userId) || 0;
@@ -123,77 +110,105 @@ async function findLeadByComposite(userId, telefono, instancia, dominio) {
 }
 
 /**
- * Upsert del lead (INSERT ... ON DUPLICATE KEY UPDATE).
- * CLAVE ÚNICA de negocio (recomendada en DB):
- *   UNIQUE (user_id, telefono, instancia_evolution_api, dominio)
- * - Nunca lanza: en error, loguea y devuelve { leadId: existingId|null }.
+ * Upsert del lead con UNIQUE (user_id, telefono, instancia_evolution_api, dominio).
+ * - Inserta TODOS los campos conocidos.
+ * - En UPDATE, SOLO reemplaza si llega un valor no vacío (no pisa con NULL/'').
  */
-async function upsertLead(payload) {
-  const telefonoRaw = payload?.telefono;
-  const instancia = nn(payload?.instancia_evolution_api);
-  const userId = payload?.user_id ? Number(payload.user_id) : null;
+async function upsertLead(leadData) {
+  const instancia = nn(leadData?.instancia_evolution_api);
+  const userId = leadData?.user_id ? Number(leadData.user_id) : null;
+  const telefonoCanon = canonicalizePhoneForStore(leadData?.telefono);
 
-  if (!telefonoRaw || !instancia || !userId) {
+  if (!telefonoCanon || !instancia || !userId) {
     console.warn('⚠️ upsertLead: faltan user_id, telefono o instancia_evolution_api; no se realiza acción');
-    return { leadId: null };
-  }
+    return { leadId: null, userId, isNew: false };
+    }
 
-  // Teléfono canónico para almacenar (ej: +59179790873)
-  const telefono = canonicalizePhoneForStore(telefonoRaw);
+  // Campos principales
+  const {
+    dominio: dominioRaw,
+    nombre,
+    apellido,
+    email,
+    fecha,
+    zona_horaria,
+    fuente,
+    ciudad,
+    pais,
+    link,
+    meet,
+    zoom,
+    ...rest
+  } = leadData;
 
-  // Dominio NO NULL (fallback desde link/meet/zoom)
+  // Dominio NUNCA NULL (fallback)
   const dominio =
-    nn(payload?.dominio) ||
-    getDomainFromUrl(payload?.link) ||
-    getDomainFromUrl(payload?.meet) ||
-    getDomainFromUrl(payload?.zoom) ||
+    (dominioRaw && String(dominioRaw).trim()) ||
+    getDomainFromUrl(link) ||
+    getDomainFromUrl(meet) ||
+    getDomainFromUrl(zoom) ||
     '';
 
-  const nombre = payload?.nombre ? String(payload.nombre).trim() : null;
-  const apellido = payload?.apellido ? String(payload.apellido).trim() : null;
+  // payload con el resto del formulario
+  const payloadExtra = Object.keys(rest).length ? JSON.stringify(rest) : null;
 
-  // IMPORTANTE: esta sentencia depende de que exista en DB la UNIQUE KEY:
-  //   uk_user_tel_inst_dom (user_id, telefono, instancia_evolution_api, dominio)
+  // INSERT completo + UPDATE solo si llega valor no vacío
   const sql = `
     INSERT INTO wa_bot_leads
-      (user_id, telefono, instancia_evolution_api, nombre, apellido, dominio)
-    VALUES (?, ?, ?, ?, ?, ?)
+      (user_id, telefono, dominio, instancia_evolution_api,
+       nombre, apellido, email, fecha, zona_horaria,
+       fuente, ciudad, pais, payload)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
-      -- mantenemos el mismo user_id para no "mover" el registro
-      user_id = VALUES(user_id),
-      -- sólo actualizamos si el valor entrante no es vacío
-      nombre = IF(VALUES(nombre) IS NULL OR VALUES(nombre) = '', nombre, VALUES(nombre)),
-      apellido = IF(VALUES(apellido) IS NULL OR VALUES(apellido) = '', apellido, VALUES(apellido)),
-      -- si cambia dominio en payload para la misma combinación única, MySQL no hará UPDATE;
-      -- si quieres actualizar dominio, debe cambiar también la clave, lo cual no aplica.
-      dominio = IFNULL(VALUES(dominio), dominio)
+      nombre        = IF(VALUES(nombre)       IS NULL OR VALUES(nombre)       = '', nombre,       VALUES(nombre)),
+      apellido      = IF(VALUES(apellido)     IS NULL OR VALUES(apellido)     = '', apellido,     VALUES(apellido)),
+      email         = IF(VALUES(email)        IS NULL OR VALUES(email)        = '', email,        VALUES(email)),
+      fecha         = IF(VALUES(fecha)        IS NULL OR VALUES(fecha)        = '', fecha,        VALUES(fecha)),
+      zona_horaria  = IF(VALUES(zona_horaria) IS NULL OR VALUES(zona_horaria) = '', zona_horaria, VALUES(zona_horaria)),
+      fuente        = IF(VALUES(fuente)       IS NULL OR VALUES(fuente)       = '', fuente,       VALUES(fuente)),
+      ciudad        = IF(VALUES(ciudad)       IS NULL OR VALUES(ciudad)       = '', ciudad,       VALUES(ciudad)),
+      pais          = IF(VALUES(pais)         IS NULL OR VALUES(pais)         = '', pais,         VALUES(pais)),
+      payload       = IF(VALUES(payload)      IS NULL OR VALUES(payload)      = '', payload,      VALUES(payload)),
+      updated_at    = CURRENT_TIMESTAMP
   `;
-  const params = [userId, telefono, instancia, nombre, apellido, dominio];
+
+  const params = [
+    userId,
+    telefonoCanon,
+    dominio,
+    instancia,
+    nombre || null,
+    apellido || null,
+    email || null,
+    fecha || null,
+    zona_horaria || null,
+    fuente || null,
+    ciudad || null,
+    pais || null,
+    payloadExtra
+  ];
 
   try {
     const [result] = await pool.query(sql, params);
     if (result && result.insertId > 0) {
-      return { leadId: result.insertId }; // inserción nueva
+      return { leadId: result.insertId, userId, isNew: true };
     }
-    // duplicate key update → obtener id exacto por combinación
-    const existing = await findLeadByComposite(userId, telefono, instancia, dominio);
-    return { leadId: existing?.id ?? null };
+    // Duplicate key update → obtener id exacto por combinación
+    const existing = await findLeadByComposite(userId, telefonoCanon, instancia, dominio);
+    return { leadId: existing?.id ?? null, userId, isNew: false };
   } catch (err) {
     console.warn('⚠️ upsertLead error (continuamos):', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
     if (err?.code === 'ER_DUP_ENTRY') {
-      const existing = await findLeadByComposite(userId, telefono, instancia, dominio);
-      return { leadId: existing?.id ?? null };
+      const existing = await findLeadByComposite(userId, telefonoCanon, instancia, dominio);
+      return { leadId: existing?.id ?? null, userId, isNew: false };
     }
-    // último intento tolerante por teléfono+instancia (compatibilidad)
-    const existing = await findLeadByPhoneAndInstance(telefono, instancia);
-    return { leadId: existing?.id ?? null };
+    // último fallback por teléfono+instancia
+    const existing = await findLeadByPhoneAndInstance(telefonoCanon, instancia);
+    return { leadId: existing?.id ?? null, userId, isNew: false };
   }
 }
 
-/**
- * Registra una etapa para el lead, de forma tolerante.
- * - Nunca lanza: loguea y sigue.
- */
+/** Historial de etapas (no lanza excepciones) */
 async function addLeadStage(leadId, etapa, metadata = null) {
   if (!leadId || !etapa) {
     console.warn('⚠️ addLeadStage: faltan leadId o etapa; no se inserta historial');
@@ -216,6 +231,6 @@ module.exports = {
   upsertLead,
   findLeadByPhoneAndInstance,
   addLeadStage,
-  // Export opcional por si se necesita en algún punto específico
+  // útil para diagnósticos
   findLeadByComposite,
 };
