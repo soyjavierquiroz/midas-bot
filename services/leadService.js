@@ -5,6 +5,24 @@ const pool = require('./dbService');
 /** Normaliza string: trim; null/undefined -> '' si se necesita NOT NULL */
 const nn = (v) => (v === undefined || v === null ? '' : String(v).trim());
 
+/** Devuelve string trim o null si queda vacío */
+const strOrNull = (v) => {
+  if (v === undefined || v === null) return null;
+  const t = String(v).trim();
+  return t === '' ? null : t;
+};
+
+/** Intenta validar un datetime "YYYY-MM-DD HH:MM:SS"; si no matchea, retorna null */
+function normalizeFecha(v) {
+  const s = strOrNull(v);
+  if (!s) return null;
+  // Acepta "YYYY-MM-DD HH:MM:SS" o "YYYY-MM-DDTHH:MM:SS"
+  const m = s.match(
+    /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/
+  );
+  return m ? s.replace('T', ' ') : null;
+}
+
 /** Extrae host (sin www.) de una URL; retorna '' si no es válida */
 function getDomainFromUrl(url) {
   if (!url) return '';
@@ -111,8 +129,8 @@ async function findLeadByComposite(userId, telefono, instancia, dominio) {
 
 /**
  * Upsert del lead con UNIQUE (user_id, telefono, instancia_evolution_api, dominio).
- * - Inserta TODOS los campos conocidos.
- * - En UPDATE, SOLO reemplaza si llega un valor no vacío (no pisa con NULL/'').
+ * Inserta TODOS los campos; en UPDATE, NO pisa con vacío/NULL.
+ * Evita error de fecha vacía en modo estricto.
  */
 async function upsertLead(leadData) {
   const instancia = nn(leadData?.instancia_evolution_api);
@@ -122,37 +140,56 @@ async function upsertLead(leadData) {
   if (!telefonoCanon || !instancia || !userId) {
     console.warn('⚠️ upsertLead: faltan user_id, telefono o instancia_evolution_api; no se realiza acción');
     return { leadId: null, userId, isNew: false };
-    }
+  }
 
   // Campos principales
-  const {
-    dominio: dominioRaw,
-    nombre,
-    apellido,
-    email,
-    fecha,
-    zona_horaria,
-    fuente,
-    ciudad,
-    pais,
-    link,
-    meet,
-    zoom,
-    ...rest
-  } = leadData;
+  const nombre       = strOrNull(leadData?.nombre);
+  const apellido     = strOrNull(leadData?.apellido);
+  const email        = strOrNull(leadData?.email);
+  const fecha        = normalizeFecha(leadData?.fecha); // <- NUNCA '' a MySQL
+  const zonaHoraria  = strOrNull(leadData?.zona_horaria);
+  const fuente       = strOrNull(leadData?.fuente);
+  const ciudad       = strOrNull(leadData?.ciudad);
+  const pais         = strOrNull(leadData?.pais);
+  const dominioRaw   = strOrNull(leadData?.dominio);
+
+  const link = leadData?.link;
+  const meet = leadData?.meet;
+  const zoom = leadData?.zoom;
 
   // Dominio NUNCA NULL (fallback)
   const dominio =
-    (dominioRaw && String(dominioRaw).trim()) ||
+    dominioRaw ||
     getDomainFromUrl(link) ||
     getDomainFromUrl(meet) ||
     getDomainFromUrl(zoom) ||
     '';
 
   // payload con el resto del formulario
+  const {
+    user_id, telefono, instancia_evolution_api, dominio: _dOmit, // omitidos (ya mapeados)
+    ...rest
+  } = leadData;
   const payloadExtra = Object.keys(rest).length ? JSON.stringify(rest) : null;
 
-  // INSERT completo + UPDATE solo si llega valor no vacío
+  // Log previo para depuración
+  console.log('📝 upsertLead params:', {
+    userId,
+    telefono: telefonoCanon,
+    dominio,
+    instancia,
+    nombre,
+    apellido,
+    email,
+    fecha,
+    zona_horaria: zonaHoraria,
+    fuente,
+    ciudad,
+    pais,
+    payload: payloadExtra ? '[JSON]' : null,
+  });
+
+  // INSERT completo + UPDATE seguro sin comparar fecha con ''
   const sql = `
     INSERT INTO wa_bot_leads
       (user_id, telefono, dominio, instancia_evolution_api,
@@ -160,15 +197,15 @@ async function upsertLead(leadData) {
        fuente, ciudad, pais, payload)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
-      nombre        = IF(VALUES(nombre)       IS NULL OR VALUES(nombre)       = '', nombre,       VALUES(nombre)),
-      apellido      = IF(VALUES(apellido)     IS NULL OR VALUES(apellido)     = '', apellido,     VALUES(apellido)),
-      email         = IF(VALUES(email)        IS NULL OR VALUES(email)        = '', email,        VALUES(email)),
-      fecha         = IF(VALUES(fecha)        IS NULL OR VALUES(fecha)        = '', fecha,        VALUES(fecha)),
-      zona_horaria  = IF(VALUES(zona_horaria) IS NULL OR VALUES(zona_horaria) = '', zona_horaria, VALUES(zona_horaria)),
-      fuente        = IF(VALUES(fuente)       IS NULL OR VALUES(fuente)       = '', fuente,       VALUES(fuente)),
-      ciudad        = IF(VALUES(ciudad)       IS NULL OR VALUES(ciudad)       = '', ciudad,       VALUES(ciudad)),
-      pais          = IF(VALUES(pais)         IS NULL OR VALUES(pais)         = '', pais,         VALUES(pais)),
-      payload       = IF(VALUES(payload)      IS NULL OR VALUES(payload)      = '', payload,      VALUES(payload)),
+      nombre        = COALESCE(NULLIF(VALUES(nombre), ''),       nombre),
+      apellido      = COALESCE(NULLIF(VALUES(apellido), ''),     apellido),
+      email         = COALESCE(NULLIF(VALUES(email), ''),        email),
+      fecha         = COALESCE(VALUES(fecha),                    fecha),       -- <- sin '' aquí
+      zona_horaria  = COALESCE(NULLIF(VALUES(zona_horaria), ''), zona_horaria),
+      fuente        = COALESCE(NULLIF(VALUES(fuente), ''),       fuente),
+      ciudad        = COALESCE(NULLIF(VALUES(ciudad), ''),       ciudad),
+      pais          = COALESCE(NULLIF(VALUES(pais), ''),         pais),
+      payload       = COALESCE(NULLIF(VALUES(payload), ''),      payload),
       updated_at    = CURRENT_TIMESTAMP
   `;
 
@@ -177,14 +214,14 @@ async function upsertLead(leadData) {
     telefonoCanon,
     dominio,
     instancia,
-    nombre || null,
-    apellido || null,
-    email || null,
-    fecha || null,
-    zona_horaria || null,
-    fuente || null,
-    ciudad || null,
-    pais || null,
+    nombre,
+    apellido,
+    email,
+    fecha,
+    zonaHoraria,
+    fuente,
+    ciudad,
+    pais,
     payloadExtra
   ];
 
@@ -231,6 +268,5 @@ module.exports = {
   upsertLead,
   findLeadByPhoneAndInstance,
   addLeadStage,
-  // útil para diagnósticos
   findLeadByComposite,
 };
