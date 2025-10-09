@@ -1,19 +1,22 @@
 // config.js
 require('dotenv').config();
 
+const toBool  = (v, def = false) => v === undefined ? def : ['true','1','yes','on'].includes(String(v).toLowerCase());
+const toFloat = (v, def) => Number.isFinite(parseFloat(v)) ? parseFloat(v) : def;
+
 module.exports = {
   port: parseInt(process.env.PORT, 10) || 4000,
 
-  // Configuración de MinIO
+  // MinIO
   minio: {
     endpoint: process.env.MINIO_ENDPOINT,
     accessKey: process.env.MINIO_ACCESS_KEY,
     secretKey: process.env.MINIO_SECRET_KEY,
-    region: process.env.MINIO_REGION,
-    forcePathStyle: process.env.MINIO_FORCE_PATH_STYLE === 'true',
+    region: process.env.MINIO_REGION || 'us-east-1',
+    forcePathStyle: toBool(process.env.MINIO_FORCE_PATH_STYLE, true),
   },
 
-  // Configuración de la base de datos MySQL
+  // MySQL
   db: {
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -21,20 +24,21 @@ module.exports = {
     database: process.env.DB_NAME,
   },
 
-  // Configuración de YOURLS
+  // YOURLS
   yourls: {
     apiUrl: process.env.YOURLS_API,
     signature: process.env.YOURLS_SIGNATURE,
   },
 
-  // Configuración de ElevenLabs TTS
+  // TTS
   tts: {
     apiKey: process.env.ELEVEN_API_KEY,
     voiceId: process.env.ELEVEN_VOICE_ID,
     modelId: process.env.ELEVEN_MODEL_ID,
-    stability: parseFloat(process.env.TTS_STABILITY) || 0.5,
-    similarityBoost: parseFloat(process.env.TTS_SIMILARITY_BOOST) || 0.7,
-    style: parseFloat(process.env.TTS_STYLE) || 0.8,
-    speakerBoost: process.env.TTS_USE_SPEAKER_BOOST === 'true',
+    stability: toFloat(process.env.TTS_STABILITY, 0.5),
+    similarityBoost: toFloat(process.env.TTS_SIMILARITY_BOOST, 0.7),
+    style: toFloat(process.env.TTS_STYLE, 0.8),
+    speakerBoost: toBool(process.env.TTS_USE_SPEAKER_BOOST, true),
+    voiceSpeed: toFloat(process.env.VOICE_SPEED, 1.0), // ← NUEVO
   },
 };
