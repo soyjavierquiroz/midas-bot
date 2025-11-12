@@ -14,57 +14,61 @@ const {
 
 /**
  * POST /bot/etapa
- * - Si llega "mensaje": se interpola y retorna HTML directo (sin etapa).
- * - Si llega "texto_html": override del HTML de la etapa (se usa ese, no DB).
- * - Flujo normal (sin "mensaje"): acortar enlaces → obtener etapa → elegir textos
- *   → interpolar → TTS → fusionar → imagen → respuesta.
+ * Flujo completo por defecto:
+ *  - upsert del lead
+ *  - registro de etapa (si viene)
+ *  - acortar enlaces (YOURLS)
+ *  - mensaje directo (si viene "mensaje")
+ *  - procesar etapa (HTML, TTS, fusión, imagen)
+ *
+ * Modo "solo guardar" (opcional):
+ *  - activar con ?only=save o payload.solo_guardar=true
+ *  - hace solo upsert y devuelve { lead_id, isNew }, sin TTS/imagen
  */
 exports.procesarEtapa = async (req, res) => {
   try {
-    // 1) Enriquecer payload (normaliza nombre/apellido, fecha legible, etc.)
+    // 1) Normalizar/enriquecer payload (nombre, fecha legible, etc.)
     const payload = preprocessPayload(req.body);
 
-    // 2) Acortar enlaces si aplica (se hace SOLO aquí para evitar doble acortado)
+    // 1.1) Modo "solo guardar" (sin TTS/imagen), si se solicita explícitamente
+    const storeOnly =
+      req.query.only === 'save' ||
+      payload.solo_guardar === true ||
+      payload.solo_guardar === '1' ||
+      payload.solo_guardar === 1;
+
+    // 2) Upsert del lead (idempotente)
+    const { leadId, userId, isNew } = await upsertLead(payload);
+
+    if (storeOnly) {
+      // Salida temprana: solo guardar
+      return res.json({
+        success: true,
+        data: { lead_id: leadId, user_id: userId, isNew, mode: 'store_only' },
+      });
+    }
+
+    // 3) Registrar la etapa si viene en el payload
+    if (payload.etapa) {
+      await addLeadStage(leadId, payload.etapa, {
+        ...payload,
+        etapaRegistradaEn: new Date().toISOString(),
+      });
+    }
+
+    // 4) Acortar enlaces (zoom/meet/link) si aplica
     await acortarLinks(payload);
 
-    // 3) Si es mensaje directo, responder sin tocar lead
+    // 5) Mensaje directo: si viene "mensaje", devolvemos ese HTML
     if (payload.mensaje) {
-      const html = handleMensaje(payload); // función pura: devuelve string
+      const html = handleMensaje(payload);
       return res.json({
         success: true,
         data: { texto_html: html, payload_original: payload },
       });
     }
 
-    // 4) Flujo de ETAPA: upsert lead (si hay datos mínimos) + registrar etapa (de forma tolerante)
-    const canUpsertLead = Boolean(payload.telefono && payload.instancia_evolution_api);
-    let leadId = null;
-
-    if (canUpsertLead) {
-      try {
-        const upsert = await upsertLead(payload);
-        leadId = upsert?.leadId ?? null;
-
-        if (leadId && payload.etapa) {
-          try {
-            await addLeadStage(leadId, payload.etapa, {
-              ...payload,
-              etapaRegistradaEn: new Date().toISOString(),
-            });
-          } catch (e) {
-            // No rompemos el flujo si registrar la etapa falla
-            console.warn('⚠️ addLeadStage falló pero continuamos:', e?.code || e?.message || e);
-          }
-        }
-      } catch (e) {
-        // Hotfix: NO rompemos el endpoint si el upsert falla
-        console.warn('⚠️ upsertLead falló pero continuamos:', e?.code || e?.message || e);
-      }
-    } else {
-      console.warn('⚠️ Saltando upsertLead/addLeadStage: faltan telefono o instancia_evolution_api');
-    }
-
-    // 5) Procesar etapa completa → HTML + audio + imagen
+    // 6) Procesar la etapa (HTML, TTS, fusión, imagen)
     const result = await handleEtapa(payload);
     return sendResponse(res, result, payload);
   } catch (err) {
@@ -77,22 +81,42 @@ exports.procesarEtapa = async (req, res) => {
 
 /**
  * POST /bot/lead
- * Crea o actualiza lead. Requiere: user_id, telefono, instancia_evolution_api
+ * Store-only: inserta/actualiza el lead y no hace nada más.
  */
 exports.crearLead = async (req, res) => {
   try {
-    const incoming = req.body || {};
-    const { user_id, telefono, instancia_evolution_api } = incoming;
+    // Compatibilidad con n8n: a veces llega { body: {...} } o body como string JSON
+    let incoming = req.body;
+    if (
+      incoming.body &&
+      typeof incoming.body === 'object' &&
+      Object.keys(incoming.body).length
+    ) {
+      incoming = incoming.body;
+    } else if (typeof incoming.body === 'string') {
+      try {
+        incoming = JSON.parse(incoming.body);
+      } catch {
+        /* noop */
+      }
+    }
 
-    if (!user_id || !telefono || !instancia_evolution_api) {
+    // Normalizar/enriquecer igual que /bot/etapa
+    const payload = preprocessPayload(incoming);
+
+    // Validación mínima
+    if (!payload.user_id || !payload.telefono || !payload.instancia_evolution_api) {
       return res.status(400).json({
         success: false,
-        error: 'Campos obligatorios: user_id, telefono e instancia_evolution_api',
+        error: 'Campos obligatorios: user_id, telefono, instancia_evolution_api',
       });
     }
 
-    const { leadId } = await upsertLead(incoming);
-    return res.json({ success: true, lead_id: leadId });
+    const { leadId, userId, isNew } = await upsertLead(payload);
+    return res.json({
+      success: true,
+      data: { lead_id: leadId, user_id: userId, isNew, mode: 'store_only' },
+    });
   } catch (err) {
     console.error('❌ Error en crearLead:', err);
     return res.status(500).json({ success: false, error: 'Error interno del servidor' });
@@ -101,9 +125,10 @@ exports.crearLead = async (req, res) => {
 
 /**
  * GET /bot/lead
- * Busca lead por teléfono e instancia_evolution_api
+ * Devuelve un lead por telefono + instancia_evolution_api
+ * (el teléfono se canoniza internamente)
  */
-exports.buscarLeadByPhoneInstance = async (req, res) => {
+exports.buscarLeadByPhoneAndInstance = async (req, res) => {
   try {
     const { telefono, instancia_evolution_api } = req.query;
     if (!telefono || !instancia_evolution_api) {

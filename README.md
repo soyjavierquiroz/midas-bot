@@ -1,169 +1,231 @@
-# 🤖 Midas Bot (v1.3)
+# 🤖 Midas Bot (v1.3.1)
 
-Microservicio modular en Node.js y Express que devuelve texto HTML, imagen y audio fusionado (voz TTS + audio base) según la etapa de un usuario. Ahora con:
+Microservicio modular en **Node.js + Express** que:
+- Guarda/actualiza leads (store-only).
+- Procesa “etapas”: devuelve **HTML**, **imagen** (MinIO) y **audio** (TTS ElevenLabs + fusión con audio base).
+- Normaliza nombre y apellido (diccionario + utilidades).
+- Acorta enlaces con **YOURLS**.
 
-- Arquitectura _handler-based_  
-- Healthcheck  
-- Middleware global de errores  
-- Configuración centralizada en `config.js`  
-- **Normalización de nombres** vía `utils/nameUtils.js` + diccionario (`utils/nameDictionary.js`)  
-- Soporte para plantillas propias de HTML (`payload.texto_html`)  
+Incluye:
+- Arquitectura **handler-based**
+- Healthcheck (`/health`)
+- Middleware global de errores
+- Config centralizada en `config.js`
+- **Override de HTML** desde el payload con `texto_html`
+- **Control de velocidad TTS** con `voice_speed`
+- Opción para **desactivar TTS** con `TTS_DISABLED=1`
 
 ---
 
 ## 🧱 Estructura general
 
+```
+
 midas-bot/
 ├── controllers/
-│ ├── botController.js
-│ └── handlers/
-│ ├── preprocessPayload.js
-│ ├── acortarLinks.js
-│ ├── handleMensaje.js
-│ ├── handleEtapa.js
-│ └── sendResponse.js
+│   ├── botController.js
+│   └── handlers/
+│       ├── preprocessPayload.js
+│       ├── acortarLinks.js
+│       ├── handleMensaje.js
+│       ├── handleEtapa.js
+│       └── sendResponse.js
 ├── middlewares/
-│ └── errorHandler.js
+│   └── errorHandler.js
 ├── routes/
-│ ├── botRoutes.js
-│ └── testRoutes.js
+│   ├── botRoutes.js
+│   └── testRoutes.js
 ├── services/
-│ ├── dbService.js
-│ ├── leadService.js
-│ ├── etapaService.js
-│ ├── fusionService.js
-│ ├── minioService.js
-│ └── ttsService.js
+│   ├── dbService.js
+│   ├── leadService.js
+│   ├── etapaService.js
+│   ├── fusionService.js
+│   ├── minioService.js
+│   └── ttsService.js
 ├── utils/
-│ ├── textUtils.js
-│ ├── urlShortener.js
-│ ├── nameDictionary.js ← Diccionario de 1000+ nombres latinos
-│ └── nameUtils.js ← Funciones de normalización
+│   ├── textUtils.js
+│   ├── urlShortener.js
+│   ├── nameDictionary.js   ← Diccionario 1000+ nombres latinos
+│   └── nameUtils.js        ← Normalización de nombres/apellidos
 ├── config.js
 ├── server.js
 ├── package.json
 ├── Dockerfile
-├── docker-compose-dev.yml
-└── docker-compose.yml
+├── docker-compose-dev.yml  ← DEV (puerto 4001)
+└── docker-compose.yml      ← PROD (puerto 4000)
 
+````
 
 ---
 
 ## 🚀 Endpoints
 
-### `GET /health`  
-Comprueba el estado del servicio:
+### `GET /health`
+Comprobación rápida del servicio.
+
+**DEV**
+```bash
+curl http://104.236.36.75:4001/health
+# → { "status": "ok" }
+````
+
+**PROD**
 
 ```bash
-curl http://<HOST>:4000/health
+curl http://104.236.36.75:4000/health
 # → { "status": "ok" }
+```
 
-POST /bot/etapa
+---
 
-Flujo principal (etapa o mensaje directo). Payload mínimo:
+### `POST /bot/lead` — Store-only (guardar/actualizar lead)
 
-curl -X POST "http://<HOST>:<PUERTO>/bot/etapa" \
+Guarda o actualiza un lead **sin generar TTS ni imagen**.
+Usa upsert con clave única compuesta: `(user_id, telefono, instancia_evolution_api, dominio)`.
+
+**Campos mínimos:** `user_id`, `telefono`, `instancia_evolution_api`
+**Opcionales:** `dominio` (si falta se intenta inferir de `link/meet/zoom`), `nombre`, `apellido`, `email`, `ciudad`, `pais`, `zona_horaria`, `fecha`, etc.
+
+**DEV**
+
+```bash
+curl -X POST "http://104.236.36.75:4001/bot/lead" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "2",
-    "nombre": "juan LUIS",
-    "apellido": "PÉREZ GÓMEZ",
-    "telefono": "+59179790873",
-    "email": "test2@example.com",
-    "etapa": "dunn",
-    "pais": "Bolivia",
+    "user_id": 6,
+    "telefono": "+59179790000",
+    "instancia_evolution_api": "tbs-lapaz",
+    "dominio": "inscripciones.tbs.edu.bo",
+    "nombre": "JAVIER",
+    "apellido": "QUIROZ",
+    "email": "javier@example.com",
     "ciudad": "Cochabamba",
-    "zona_horaria": "America/La_Paz",
-    "instancia_evolution_api": "prueba",
-    "dominio": "prueba.com"
+    "pais": "Bolivia",
+    "zona_horaria": "America/La_Paz"
   }'
+```
 
-    Si incluyes "mensaje": "...", se omite la etapa y solo se devuelve HTML interpolado.
+**Respuesta**
 
-Ejemplo de payload con plantilla propia:
+```json
+{ "success": true, "data": { "lead_id": 123, "user_id": 6, "isNew": false, "mode": "store_only" } }
+```
 
-curl -X POST "http://<HOST>:<PUERTO>/bot/etapa" \
+---
+
+### `GET /bot/lead` — Consulta por teléfono + instancia
+
+Verifica si un lead existe y trae sus datos.
+
+**DEV**
+
+```bash
+curl -s "http://104.236.36.75:4001/bot/lead?telefono=%2B59179790000&instancia_evolution_api=tbs-lapaz"
+```
+
+**Respuesta 200**
+
+```json
+{ "success": true, "data": { "lead_id": 123, "user_id": 6, "nombre": "Javier", "...": "..." } }
+```
+
+**Respuesta 404**
+
+```json
+{ "success": false, "error": "Lead no encontrado" }
+```
+
+---
+
+### `POST /bot/etapa` — Proceso completo
+
+Flujo: **upsert lead → etapa → acortar enlaces → HTML → TTS + fusión → imagen**.
+Si envías `texto_html` en el payload, **se usa tu HTML** en lugar del de la BD.
+
+**DEV**
+
+```bash
+curl -X POST "http://104.236.36.75:4001/bot/etapa" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "3",
-    "nombre": "Ana",
-    "apellido": "Pérez",
-    "telefono": "+59179790873",
-    "email": "test@example.com",
-    "etapa": "dunn",
-    "pais": "Bolivia",
-    "ciudad": "Cochabamba",
+    "user_id": 6,
+    "telefono": "+59179790000",
+    "instancia_evolution_api": "tbs-lapaz",
+    "dominio": "inscripciones.tbs.edu.bo",
+    "etapa": "lapaz_parvulario",
+    "nombre": "JAVIER",
+    "apellido": "QUIROZ",
     "zona_horaria": "America/La_Paz",
-    "instancia_evolution_api": "prueba",
-    "texto_html": "¡Hola <b>{nombre}</b>, bienvenido a la etapa de prueba! Visita {link}."
+    "fecha": "2025-06-20 15:30:00",
+    "link": "https://kuruk.in/tbs-reserva",
+    "link_enviar": "1",
+    "link_acortar": "1"
   }'
+```
 
-Respuesta esperada:
+**Solo guardar con el mismo endpoint (opcional)**
 
+```bash
+curl -X POST "http://104.236.36.75:4001/bot/etapa?only=save" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":6,"telefono":"+59179790000","instancia_evolution_api":"tbs-lapaz","dominio":"inscripciones.tbs.edu.bo"}'
+```
+
+**Respuesta (flujo completo)**
+
+```json
 {
   "success": true,
   "data": {
-    "imagen_base64_puro": "<Base64>",
-    "texto_html": "¡Hola <b>Ana</b>, bienvenido a la etapa de prueba! Visita https://…",
-    "audio_base64_puro": "<Base64>",
-    "payload_original": { /* JSON enriquecido con dia_legible, hora_legible, enlaces acortados… */ }
+    "imagen_base64_puro": "...",
+    "texto_html": "Hola Javier, ...",
+    "audio_base64_puro": "...",
+    "payload_original": { ... }
   }
 }
+```
 
-✨ Normalización de nombres
+---
 
-Ahora, antes de procesar, los campos nombre y apellido se normalizan usando:
+## ✨ Normalización de nombres
 
-    utils/nameDictionary.js: más de 1000 nombres latinos.
+* `utils/nameDictionary.js`: catálogo 1000+ nombres latinos (variantes comunes).
+* `utils/nameUtils.js`: capitalización, compuestos, tildes, espacios.
 
-    utils/nameUtils.js: lógica de mayúsculas, tildes, espacios y compuestos.
+**Ejemplos**
 
-normalizeName('maria DEL Carmen')      // → 'María del Carmen'
-normalizeName('LUISangel')             // → 'Luis Ángel'
-normalizeSurname('perez GÓmez')        // → 'Pérez Gómez'
+```js
+normalizeName('maria DEL Carmen')  // → 'María del Carmen'
+normalizeName('LUISangel')         // → 'Luis Ángel'
+normalizeSurname('perez GÓmez')    // → 'Pérez Gómez'
+```
 
-⚙️ Dependencias principales
+---
 
-    Node.js 18+
+## 🎧 TTS (ElevenLabs) y fusión
 
-    Express
+* `services/ttsService.js` → genera audio TTS (`generarAudioTTS`).
+* `services/fusionService.js` → fusiona TTS + audio base (ffmpeg).
+* `services/minioService.js` → obtiene audio base aleatorio y la imagen desde MinIO.
 
-    moment-timezone (es)
+**Velocidad TTS**: enviar `voice_speed` en la config de usuario (BD) o en payload para override.
+**Desactivar TTS**: `TTS_DISABLED=1` salta la generación y fusión (sigue devolviendo HTML e imagen).
 
-    mysql2
+---
 
-    @aws-sdk/client-s3
+## 🗄️ Tablas usadas
 
-    ffmpeg-static + fluent-ffmpeg
+* `wa_bot_leads`: lead maestro. **Índice único recomendado**: `(user_id, telefono, instancia_evolution_api, dominio)`.
+* `wa_bot_lead_stages`: historial de etapas por lead.
+* `wa_bot_etapas`: contenidos (textos/textos_html) por `user_id` y `nombre` (etapa).
+* `wa_bot_config`: parámetros TTS por usuario (`eleven_api_key`, `voice_id`, `model_id`, `stability`, `similarity_boost`, `style`, `speaker_boost`, `voice_speed`).
 
-    axios + form-data
+---
 
-    uuid
+## 🔐 Variables de entorno (resumen)
 
-    dotenv
-
-🐳 Despliegue
-Desarrollo
-
-docker-compose -f docker-compose-dev.yml up -d --build
-
-    Expone el servicio en el puerto 4001.
-
-    Volumen local para desarrollo en caliente.
-
-Producción
-
-docker-compose up -d --build
-
-    Expuesto en puerto 4000.
-
-    Integrado con Traefik en docker-compose.yml.
-
-🔐 Variables de entorno
-
-Defínelas en tu .env o en los bloques environment de los Docker Compose:
-
-# Puerto de la API
+```env
+# API
 PORT=4001
 
 # MinIO
@@ -173,7 +235,7 @@ MINIO_SECRET_KEY=
 MINIO_REGION=
 MINIO_FORCE_PATH_STYLE=true
 
-# MySQL (WordPress)
+# MySQL
 DB_HOST=
 DB_USER=
 DB_PASSWORD=
@@ -191,21 +253,45 @@ TTS_STABILITY=0.5
 TTS_SIMILARITY_BOOST=0.7
 TTS_STYLE=0.8
 TTS_USE_SPEAKER_BOOST=true
+TTS_SPEED=1.0          # ← opcional (voice_speed por env)
 
-📝 Notas
+# Desactivar TTS temporalmente
+TTS_DISABLED=0         # ← poner 1 para saltar TTS
+```
 
-    Modularidad: cada paso en su handler.
+---
 
-    Configuración central en config.js.
+## 🐳 Despliegue
 
-    Errores globales en middlewares/errorHandler.js.
+**Desarrollo (puerto 4001)**
 
-    Cache y manejo de duplicados en URL shortener.
+```bash
+docker-compose -f docker-compose-dev.yml up -d --build
+```
 
-    Logs explícitos en cada etapa.
+**Producción (puerto 4000)**
 
-    Personalización avanzada vía nameUtils + nameDictionary.
+```bash
+docker-compose up -d --build
+```
 
-📞 Contacto
+> En producción, `docker-compose.yml` incluye labels para Traefik (si aplica).
 
-Kurukin – Proyecto desarrollado por Javier Quiroz.
+---
+
+## 📝 Notas
+
+* Rutas clave:
+
+  * `POST /bot/lead` → **solo guardar/actualizar**
+  * `GET /bot/lead` → **consulta** por teléfono + instancia
+  * `POST /bot/etapa` → **flujo completo** (guardar/actualizar + etapa + TTS + imagen)
+* `texto_html` en payload **sobrescribe** el HTML de la etapa en BD.
+* Manejo de URLs: cache de duplicados y fallback GET en YOURLS.
+* Logs detallados para diagnóstico en Portainer/Swarm.
+
+---
+
+## 📞 Contacto
+
+Proyecto **Kurukin** – Desarrollado por **Javier Quiroz**
