@@ -1,28 +1,25 @@
 // routes/botRoutes.js
 
-/**
- * Rutas bajo /bot:
- *  - POST /etapa   → procesar flujo de etapa o mensaje
- *  - POST /lead    → crear o actualizar un lead
- *  - GET  /lead    → buscar un lead por teléfono e instancia
- */
-
 const express = require('express');
 const router  = express.Router();
 
 const {
-  procesarEtapa,
-  crearLead,
-  buscarLeadByPhoneInstance
+  procesarEtapa,           // POST /bot/etapa  → flujo completo (o store-only si ?only=save)
+  crearLead,               // POST /bot/lead   → store-only (guardar/actualizar)
+  buscarLeadByPhoneAndInstance, // GET /bot/lead → consulta por telefono + instancia
 } = require('../controllers/botController');
 
-// Procesar etapa o mensaje
+// Healthcheck bajo /bot (además del /health global en server.js)
+router.get('/health', (req, res) => res.json({ status: 'ok' }));
+
+// Proceso completo (guardar + etapa + acortar + TTS + imagen)
+// Nota: si envías ?only=save o { "solo_guardar": true }, hará solo store-only
 router.post('/etapa', procesarEtapa);
 
-// Crear o actualizar lead
+// Store-only: inserta/actualiza el lead y no hace nada más
 router.post('/lead', crearLead);
 
-// Obtener datos de un lead existente
-router.get('/lead', buscarLeadByPhoneInstance);
+// Consulta de lead por telefono + instancia_evolution_api
+router.get('/lead', buscarLeadByPhoneAndInstance);
 
 module.exports = router;
