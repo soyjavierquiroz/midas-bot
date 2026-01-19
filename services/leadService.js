@@ -17,9 +17,7 @@ function normalizeFecha(v) {
   const s = strOrNull(v);
   if (!s) return null;
   // Acepta "YYYY-MM-DD HH:MM:SS" o "YYYY-MM-DDTHH:MM:SS"
-  const m = s.match(
-    /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/
-  );
+  const m = s.match(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/);
   return m ? s.replace('T', ' ') : null;
 }
 
@@ -55,6 +53,40 @@ function buildPhoneCandidates(raw) {
 /** Teléfono canon para ALMACENAR: solo dígitos (sin +) */
 function canonicalizePhoneForStore(raw) {
   return String(raw || '').replace(/\D+/g, '');
+}
+
+/** Buscar por lead_id (completo) */
+async function findLeadById(leadId) {
+  try {
+    const id = Number(leadId) || 0;
+    if (!id) return null;
+
+    const [rows] = await pool.query(
+      `SELECT
+         lead_id AS id,
+         user_id,
+         telefono,
+         instancia_evolution_api,
+         nombre,
+         apellido,
+         email,
+         fecha,
+         zona_horaria,
+         fuente,
+         ciudad,
+         pais,
+         payload,
+         dominio
+       FROM wa_bot_leads
+       WHERE lead_id = ?
+       LIMIT 1`,
+      [id]
+    );
+    return rows && rows[0] ? rows[0] : null;
+  } catch (err) {
+    console.warn('⚠️ findLeadById falló:', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
+    return null;
+  }
 }
 
 /**
@@ -128,25 +160,22 @@ async function findLeadByComposite(userId, telefono, instancia, dominio) {
 }
 
 /**
- * Upsert del lead con UNIQUE (user_id, telefono, instancia_evolution_api, dominio).
- * Inserta TODOS los campos; en UPDATE, NO pisa con vacío/NULL.
- * Evita error de fecha vacía en modo estricto.
+ * Upsert del lead.
+ * - Si llega lead_id → UPDATE por ID (telefono no es obligatorio).
+ * - Si NO llega lead_id → INSERT con UNIQUE (user_id, telefono, instancia, dominio)
+ *   y ON DUPLICATE UPDATE seguro.
  */
 async function upsertLead(leadData) {
+  const leadIdIn  = leadData?.lead_id ? Number(leadData.lead_id) : null;
   const instancia = nn(leadData?.instancia_evolution_api);
-  const userId = leadData?.user_id ? Number(leadData.user_id) : null;
+  const userId    = leadData?.user_id ? Number(leadData.user_id) : null;
   const telefonoCanon = canonicalizePhoneForStore(leadData?.telefono);
 
-  if (!telefonoCanon || !instancia || !userId) {
-    console.warn('⚠️ upsertLead: faltan user_id, telefono o instancia_evolution_api; no se realiza acción');
-    return { leadId: null, userId, isNew: false };
-  }
-
-  // Campos principales
+  // Campos principales (opcionales)
   const nombre       = strOrNull(leadData?.nombre);
   const apellido     = strOrNull(leadData?.apellido);
   const email        = strOrNull(leadData?.email);
-  const fecha        = normalizeFecha(leadData?.fecha); // <- NUNCA '' a MySQL
+  const fecha        = normalizeFecha(leadData?.fecha); // nunca '' a MySQL
   const zonaHoraria  = strOrNull(leadData?.zona_horaria);
   const fuente       = strOrNull(leadData?.fuente);
   const ciudad       = strOrNull(leadData?.ciudad);
@@ -157,7 +186,7 @@ async function upsertLead(leadData) {
   const meet = leadData?.meet;
   const zoom = leadData?.zoom;
 
-  // Dominio NUNCA NULL (fallback)
+  // Dominio fallback si no se envía explícito
   const dominio =
     dominioRaw ||
     getDomainFromUrl(link) ||
@@ -165,32 +194,94 @@ async function upsertLead(leadData) {
     getDomainFromUrl(zoom) ||
     '';
 
-  // payload con el resto del formulario
+  // payload extra (no repetimos user_id, telefono, instancia, dominio)
   const {
-    user_id, telefono, instancia_evolution_api, dominio: _dOmit, // omitidos (ya mapeados)
+    user_id, telefono, instancia_evolution_api, dominio: _omitDom,
     ...rest
   } = leadData;
   const payloadExtra = Object.keys(rest).length ? JSON.stringify(rest) : null;
 
-  // Log previo para depuración
-  console.log('📝 upsertLead params:', {
+  // === A) UPDATE por lead_id (telefono no requerido) ===
+  if (leadIdIn) {
+    console.log('📝 upsertLead UPDATE by lead_id:', {
+      leadIdIn,
+      userId,
+      telefono: telefonoCanon || '(sin cambio)',
+      dominio: dominio || '(sin cambio)',
+      instancia: instancia || '(sin cambio)',
+    });
+
+    const sqlUpdate = `
+      UPDATE wa_bot_leads
+         SET user_id                 = COALESCE(?, user_id),
+             telefono                = COALESCE(NULLIF(?, ''), telefono),
+             dominio                 = COALESCE(NULLIF(?, ''), dominio),
+             instancia_evolution_api = COALESCE(NULLIF(?, ''), instancia_evolution_api),
+             nombre                  = COALESCE(NULLIF(?, ''), nombre),
+             apellido                = COALESCE(NULLIF(?, ''), apellido),
+             email                   = COALESCE(NULLIF(?, ''), email),
+             fecha                   = COALESCE(?, fecha),
+             zona_horaria            = COALESCE(NULLIF(?, ''), zona_horaria),
+             fuente                  = COALESCE(NULLIF(?, ''), fuente),
+             ciudad                  = COALESCE(NULLIF(?, ''), ciudad),
+             pais                    = COALESCE(NULLIF(?, ''), pais),
+             payload                 = COALESCE(NULLIF(?, ''), payload),
+             updated_at              = CURRENT_TIMESTAMP
+       WHERE lead_id = ?
+       LIMIT 1
+    `;
+
+    const paramsUpdate = [
+      userId || null,
+      telefonoCanon || '',
+      dominio || '',
+      instancia || '',
+      nombre || '',
+      apellido || '',
+      email || '',
+      fecha, // null o 'YYYY-MM-DD HH:MM:SS'
+      zonaHoraria || '',
+      fuente || '',
+      ciudad || '',
+      pais || '',
+      payloadExtra || '',
+      leadIdIn,
+    ];
+
+    try {
+      const [res] = await pool.query(sqlUpdate, paramsUpdate);
+      // Si no afectó filas, intentamos leer para confirmar existencia
+      if (!res.affectedRows) {
+        const exists = await findLeadById(leadIdIn);
+        if (!exists) {
+          console.warn('⚠️ upsertLead: lead_id no existe, no se realizó UPDATE');
+          return { leadId: null, userId, isNew: false };
+        }
+      }
+      // Devolvemos lead_id (no cambiamos ID)
+      const after = await findLeadById(leadIdIn);
+      return { leadId: leadIdIn, userId: after?.user_id ?? userId, isNew: false };
+    } catch (err) {
+      console.warn('⚠️ upsertLead UPDATE by ID falló (continuamos):', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
+      const after = await findLeadById(leadIdIn);
+      return { leadId: after?.id ?? null, userId: after?.user_id ?? userId, isNew: false };
+    }
+  }
+
+  // === B) INSERT/UPDATE por clave compuesta (user_id, telefono, instancia, dominio) ===
+  if (!telefonoCanon || !instancia || !userId) {
+    console.warn('⚠️ upsertLead: faltan user_id, telefono o instancia_evolution_api; no se realiza acción');
+    return { leadId: null, userId, isNew: false };
+  }
+
+  console.log('📝 upsertLead INSERT/UPSERT:', {
     userId,
     telefono: telefonoCanon,
     dominio,
     instancia,
-    nombre,
-    apellido,
-    email,
-    fecha,
-    zona_horaria: zonaHoraria,
-    fuente,
-    ciudad,
-    pais,
-    payload: payloadExtra ? '[JSON]' : null,
   });
 
-  // INSERT completo + UPDATE seguro sin comparar fecha con ''
-  const sql = `
+  const sqlInsert = `
     INSERT INTO wa_bot_leads
       (user_id, telefono, dominio, instancia_evolution_api,
        nombre, apellido, email, fecha, zona_horaria,
@@ -200,7 +291,7 @@ async function upsertLead(leadData) {
       nombre        = COALESCE(NULLIF(VALUES(nombre), ''),       nombre),
       apellido      = COALESCE(NULLIF(VALUES(apellido), ''),     apellido),
       email         = COALESCE(NULLIF(VALUES(email), ''),        email),
-      fecha         = COALESCE(VALUES(fecha),                    fecha),       -- <- sin '' aquí
+      fecha         = COALESCE(VALUES(fecha),                    fecha),
       zona_horaria  = COALESCE(NULLIF(VALUES(zona_horaria), ''), zona_horaria),
       fuente        = COALESCE(NULLIF(VALUES(fuente), ''),       fuente),
       ciudad        = COALESCE(NULLIF(VALUES(ciudad), ''),       ciudad),
@@ -209,7 +300,7 @@ async function upsertLead(leadData) {
       updated_at    = CURRENT_TIMESTAMP
   `;
 
-  const params = [
+  const paramsInsert = [
     userId,
     telefonoCanon,
     dominio,
@@ -222,11 +313,11 @@ async function upsertLead(leadData) {
     fuente,
     ciudad,
     pais,
-    payloadExtra
+    payloadExtra,
   ];
 
   try {
-    const [result] = await pool.query(sql, params);
+    const [result] = await pool.query(sqlInsert, paramsInsert);
     if (result && result.insertId > 0) {
       return { leadId: result.insertId, userId, isNew: true };
     }
@@ -234,7 +325,7 @@ async function upsertLead(leadData) {
     const existing = await findLeadByComposite(userId, telefonoCanon, instancia, dominio);
     return { leadId: existing?.id ?? null, userId, isNew: false };
   } catch (err) {
-    console.warn('⚠️ upsertLead error (continuamos):', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
+    console.warn('⚠️ upsertLead INSERT/UPSERT falló (continuamos):', err?.code, err?.errno, err?.sqlState, err?.sqlMessage);
     if (err?.code === 'ER_DUP_ENTRY') {
       const existing = await findLeadByComposite(userId, telefonoCanon, instancia, dominio);
       return { leadId: existing?.id ?? null, userId, isNew: false };
@@ -269,4 +360,5 @@ module.exports = {
   findLeadByPhoneAndInstance,
   addLeadStage,
   findLeadByComposite,
+  findLeadById, // export NUEVO
 };

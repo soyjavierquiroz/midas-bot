@@ -10,6 +10,7 @@ const {
   upsertLead,
   addLeadStage,
   findLeadByPhoneAndInstance,
+  findLeadById, // ← nuevo: búsqueda directa por ID
 } = require('../services/leadService');
 
 /**
@@ -82,33 +83,27 @@ exports.procesarEtapa = async (req, res) => {
 /**
  * POST /bot/lead
  * Store-only: inserta/actualiza el lead y no hace nada más.
+ * - Si llega lead_id → UPDATE por ID (telefono NO es obligatorio)
+ * - Si no llega lead_id → requiere (user_id, telefono, instancia_evolution_api)
  */
 exports.crearLead = async (req, res) => {
   try {
     // Compatibilidad con n8n: a veces llega { body: {...} } o body como string JSON
     let incoming = req.body;
-    if (
-      incoming.body &&
-      typeof incoming.body === 'object' &&
-      Object.keys(incoming.body).length
-    ) {
+    if (incoming.body && typeof incoming.body === 'object' && Object.keys(incoming.body).length) {
       incoming = incoming.body;
     } else if (typeof incoming.body === 'string') {
-      try {
-        incoming = JSON.parse(incoming.body);
-      } catch {
-        /* noop */
-      }
+      try { incoming = JSON.parse(incoming.body); } catch { /* noop */ }
     }
 
     // Normalizar/enriquecer igual que /bot/etapa
     const payload = preprocessPayload(incoming);
 
-    // Validación mínima
-    if (!payload.user_id || !payload.telefono || !payload.instancia_evolution_api) {
+    // Validación mínima flexible
+    if (!payload.lead_id && (!payload.user_id || !payload.telefono || !payload.instancia_evolution_api)) {
       return res.status(400).json({
         success: false,
-        error: 'Campos obligatorios: user_id, telefono, instancia_evolution_api',
+        error: 'Campos obligatorios: (lead_id) ó (user_id, telefono, instancia_evolution_api)',
       });
     }
 
@@ -125,26 +120,35 @@ exports.crearLead = async (req, res) => {
 
 /**
  * GET /bot/lead
- * Devuelve un lead por telefono + instancia_evolution_api
- * (el teléfono se canoniza internamente)
+ * Nueva lógica:
+ *  - Si viene lead_id => buscar por ID directamente
+ *  - Si NO viene lead_id => compatibilidad: telefono + instancia_evolution_api
  */
-exports.buscarLeadByPhoneAndInstance = async (req, res) => {
+exports.buscarLead = async (req, res) => {
   try {
-    const { telefono, instancia_evolution_api } = req.query;
+    const { lead_id, telefono, instancia_evolution_api } = req.query;
+
+    if (lead_id) {
+      console.log('🔎 buscarLead por lead_id =', lead_id);
+      const lead = await findLeadById(lead_id);
+      if (!lead) return res.status(404).json({ success: false, error: 'Lead no encontrado' });
+      return res.json({ success: true, data: lead });
+    }
+
+    // Compatibilidad anterior
     if (!telefono || !instancia_evolution_api) {
       return res.status(400).json({
         success: false,
-        error: 'Query params obligatorios: telefono e instancia_evolution_api',
+        error: 'Query params obligatorios: lead_id ó (telefono e instancia_evolution_api)',
       });
     }
 
+    console.log('🔎 buscarLead por telefono+instancia =', telefono, instancia_evolution_api);
     const lead = await findLeadByPhoneAndInstance(telefono, instancia_evolution_api);
-    if (!lead) {
-      return res.status(404).json({ success: false, error: 'Lead no encontrado' });
-    }
+    if (!lead) return res.status(404).json({ success: false, error: 'Lead no encontrado' });
     return res.json({ success: true, data: lead });
   } catch (err) {
-    console.error('❌ Error en buscarLeadByPhoneInstance:', err);
+    console.error('❌ Error en buscarLead:', err);
     return res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 };
